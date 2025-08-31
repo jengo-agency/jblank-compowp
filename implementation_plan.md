@@ -39,7 +39,6 @@ The implementation involves creating the standalone script and Composer plugin p
 [Functions]
 The script contains modular functions for validation and fixing, with the plugin providing command-line integration.
 
-- New functions in wp-setup.php:
   - check_composer_dependency() : void - verifies johnpbloch/wordpress in composer.json
   - fix_composer_dependency() : void - adds dependency to composer.json
   - check_wp_files_clean() : array - scans root for WP files to remove
