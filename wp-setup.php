@@ -7,7 +7,7 @@
  * Automatically downloads required templates and sets up the project structure.
  *
  * Quick Start (run this command):
- * curl -s https://raw.githubusercontent.com/user/repo/main/wp-setup.php | php -- --check
+ * curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/wp-setup.php | php -- --check
  *
  * Usage: php wp-setup.php [--check|--fix]
  *   --check  : Validate current setup (default)
@@ -146,11 +146,11 @@ exit(0);
  * Download sample files from the same GitHub repository
  */
 function download_sample_files() {
-    $base_url = 'https://raw.githubusercontent.com/user/repo/main/';
+    $base_url = 'https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/';
 
     $files_to_download = [
-        'sample.php' => $base_url . 'sample.php',
-        'composer-sample.json' => $base_url . 'composer-sample.json'
+        'wp-config.sample.php' => $base_url . 'wp-config.sample.php',
+        'composer.sample.json' => $base_url . 'composer.sample.json'
     ];
 
     foreach ($files_to_download as $local_file => $remote_url) {
@@ -435,7 +435,7 @@ function check_themes_plugins() {
  */
 function check_composer_json($user_input) {
     $composer_file = 'composer.json';
-    $sample_file = 'composer-sample.json';
+    $sample_file = 'composer.sample.json';
 
     if (!file_exists($composer_file)) {
         return [
@@ -450,7 +450,7 @@ function check_composer_json($user_input) {
         return [
             'status' => false,
             'critical' => false,
-            'message' => 'composer-sample.json template not found',
+            'message' => 'composer.sample.json template not found',
             'fix_function' => 'fix_composer_json'
         ];
     }
@@ -534,10 +534,10 @@ function fix_wp_files_clean() {
  */
 function fix_wp_config() {
     $config_file = 'wp-config.php';
-    $sample_file = 'sample.php';
-    
+    $sample_file = 'wp-config.sample.php';
+
     if (!file_exists($sample_file)) {
-        output_error("Cannot fix wp-config.php: sample.php template not found");
+        output_error("Cannot fix wp-config.php: wp-config.sample.php template not found");
         return;
     }
     
@@ -592,10 +592,10 @@ function fix_themes_plugins() {
  */
 function fix_composer_json($user_input) {
     $composer_file = 'composer.json';
-    $sample_file = 'composer-sample.json';
+    $sample_file = 'composer.sample.json';
 
     if (!file_exists($sample_file)) {
-        output_error("Cannot fix composer.json: composer-sample.json template not found");
+        output_error("Cannot fix composer.json: composer.sample.json template not found");
         return;
     }
 
