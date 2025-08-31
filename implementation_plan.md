@@ -5,6 +5,8 @@ The goal is to create a standalone PHP script loaded via curl from a public GitH
 
 The initial setup command will be: `curl -s https://raw.githubusercontent.com/user/repo/main/wp-setup.php | php -- --check` (or --fix). The script will be executed as `php wp-setup.php --check/--fix` after download. This hybrid implementation provides both the robust standalone script for initial/broken environments and a Composer plugin for seamless integration once Composer is functional. It addresses shared hosting constraints by using PHP file operations without exec, ensuring WordPress files are correctly organized and configured according to the provided sample templates.
 
+**Enhanced Compatibility**: The script now includes graceful fallback handling for environments where the `exec()` function is disabled (common in shared hosting). When `exec()` is unavailable, the script provides clear manual instructions for running Composer commands, ensuring the script works in all PHP environments while still providing automation when possible.
+
 [Types]
 The script will use associative arrays for configuration checks and status tracking, with keys like 'composer_dependency', 'wp_files_clean', 'wp_config_valid', etc., each containing boolean status and descriptive messages.
 
@@ -50,6 +52,8 @@ The script contains modular functions for validation and fixing, with the plugin
   - fix_themes_plugins() : void - removes unauthorized themes/plugins
   - check_composer_json() : array - compares with composer-sample.json
   - fix_composer_json() : void - updates composer.json to match template
+  - check_repman_token() : array - verifies Repman token is set (not "xxx")
+  - fix_repman_token() : void - prompts user for token and updates composer.json
   - detect_environment() : string - returns 'dev' or 'prod' based on WP_HOME
   - confirm_user() : bool - prompts user for confirmation on WP_HOME
 

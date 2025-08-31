@@ -19,10 +19,12 @@
  * - Cleans up unnecessary files from root
  * - Creates proper wp-config.php and index.php
  * - Sets up composer.json with custom theme dependencies
+ * - Validates and configures Repman repository token
  * - Prompts for website-slug and website-repo-slug customization (interactive mode)
  * - Supports non-interactive mode with environment variables:
  *   - WP_SETUP_WEBSITE_SLUG (default: mywebsite)
  *   - WP_SETUP_WEBSITE_REPO_SLUG (default: mywebsite-theme)
+ *   - WP_SETUP_REPMAN_TOKEN (for Repman repository authentication)
  *
  * @author Generated WP Setup Tool
  * @version 1.0.0
@@ -201,6 +203,7 @@ function get_user_input() {
         output_warning("Website slug: {$input['website_slug']}");
         output_warning("Website repo slug: {$input['website_repo_slug']}");
         output_warning("Set WP_SETUP_WEBSITE_SLUG and WP_SETUP_WEBSITE_REPO_SLUG environment variables to customize.");
+        output_warning("For Repman token, set WP_SETUP_REPMAN_TOKEN environment variable.");
     }
 
     return $input;
@@ -213,6 +216,7 @@ function run_all_checks($user_input) {
     $results = [];
 
     $results[] = check_composer_dependency();
+    $results[] = check_repman_token();
     $results[] = check_wp_files_clean();
     $results[] = check_wp_config();
     $results[] = check_index_php();
@@ -291,6 +295,44 @@ function check_composer_dependency() {
         'critical' => false,
         'message' => $has_wordpress ? 'WordPress dependency found in composer.json' : 'WordPress dependency missing from composer.json',
         'fix_function' => 'fix_composer_dependency'
+    ];
+}
+
+/**
+ * Check if Repman token is properly configured (not "xxx")
+ */
+function check_repman_token() {
+    $composer_file = 'composer.json';
+
+    if (!file_exists($composer_file)) {
+        return [
+            'status' => false,
+            'critical' => true,
+            'message' => 'composer.json not found - cannot check Repman token',
+            'fix_function' => 'fix_repman_token'
+        ];
+    }
+
+    $composer_data = json_decode(file_get_contents($composer_file), true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return [
+            'status' => false,
+            'critical' => true,
+            'message' => 'Invalid composer.json format - cannot check Repman token',
+            'fix_function' => 'fix_repman_token'
+        ];
+    }
+
+    // Check if Repman repository authentication is configured
+    $has_repman_auth = isset($composer_data['config']['http-basic']['jengo.repo.repman.io']);
+    $repman_password = $composer_data['config']['http-basic']['jengo.repo.repman.io']['password'] ?? null;
+    $token_configured = $has_repman_auth && $repman_password !== 'xxx' && !empty($repman_password);
+
+    return [
+        'status' => $token_configured,
+        'critical' => true,
+        'message' => $token_configured ? 'Repman token is properly configured' : 'Repman token not configured or set to placeholder value',
+        'fix_function' => 'fix_repman_token'
     ];
 }
 
@@ -503,6 +545,71 @@ function check_composer_json($user_input) {
 }
 
 /**
+ * Fix Repman token configuration
+ */
+function fix_repman_token() {
+    $composer_file = 'composer.json';
+
+    if (!file_exists($composer_file)) {
+        output_error("Cannot fix Repman token: composer.json not found");
+        return;
+    }
+
+    $composer_data = json_decode(file_get_contents($composer_file), true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        output_error("Cannot fix Repman token: Invalid composer.json format");
+        return;
+    }
+
+    // Check if we're in interactive mode
+    $is_interactive = defined('STDIN') && is_resource(STDIN) &&
+                     function_exists('posix_isatty') && posix_isatty(STDIN);
+
+    $token = null;
+
+    if ($is_interactive) {
+        // Interactive mode - prompt user for input
+        echo "Enter your Repman repository token: ";
+        $token = trim(fgets(STDIN));
+    } else {
+        // Non-interactive mode - try environment variable
+        $token = getenv('WP_SETUP_REPMAN_TOKEN');
+        if (!$token) {
+            output_error("Cannot configure Repman token: Not running in interactive mode and WP_SETUP_REPMAN_TOKEN not set");
+            output_info("Please set the WP_SETUP_REPMAN_TOKEN environment variable:");
+            output_info("export WP_SETUP_REPMAN_TOKEN=your_token_here");
+            output_info("Or run the script interactively to be prompted for the token.");
+            return;
+        }
+    }
+
+    if (empty($token)) {
+        output_error("Repman token cannot be empty");
+        return;
+    }
+
+    // Ensure the config structure exists
+    if (!isset($composer_data['config'])) {
+        $composer_data['config'] = [];
+    }
+    if (!isset($composer_data['config']['http-basic'])) {
+        $composer_data['config']['http-basic'] = [];
+    }
+    if (!isset($composer_data['config']['http-basic']['jengo.repo.repman.io'])) {
+        $composer_data['config']['http-basic']['jengo.repo.repman.io'] = [
+            'username' => 'token',
+            'password' => ''
+        ];
+    }
+
+    // Update the password
+    $composer_data['config']['http-basic']['jengo.repo.repman.io']['password'] = $token;
+
+    file_put_contents($composer_file, json_encode($composer_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    output_success("Repman token configured successfully");
+}
+
+/**
  * Fix composer dependency
  */
 function fix_composer_dependency() {
@@ -668,6 +775,15 @@ function fix_composer_json($user_input) {
 function run_composer_install() {
     output_info("Running composer install to create WordPress structure...");
 
+    // Check if exec() function is available
+    if (!function_exists('exec')) {
+        output_warning("exec() function is not available in this environment.");
+        output_info("Please run the following command manually:");
+        output_info("composer install --no-dev --optimize-autoloader");
+        output_info("Or: php composer.phar install --no-dev --optimize-autoloader");
+        return;
+    }
+
     // Check if composer is available
     $composer_command = 'composer';
     if (!command_exists($composer_command)) {
@@ -676,7 +792,9 @@ function run_composer_install() {
         if (!command_exists($composer_command)) {
             $composer_command = './composer.phar';
             if (!file_exists($composer_command)) {
-                output_error("Composer not found. Please install Composer or ensure it's in your PATH.");
+                output_warning("Composer not found in PATH. Please run manually:");
+                output_info("composer install --no-dev --optimize-autoloader");
+                output_info("Or: php composer.phar install --no-dev --optimize-autoloader");
                 return;
             }
         }
@@ -700,6 +818,7 @@ function run_composer_install() {
         if (!empty($output)) {
             output_error("Composer output: " . implode("\n", $output));
         }
+        output_info("You may need to run composer install manually.");
     }
 }
 
@@ -707,6 +826,11 @@ function run_composer_install() {
  * Check if a command exists in the system
  */
 function command_exists($command) {
+    // If exec() is not available, we can't check
+    if (!function_exists('exec')) {
+        return false;
+    }
+
     $which_command = "which $command 2>/dev/null";
     exec($which_command, $output, $return_code);
     return $return_code === 0;
