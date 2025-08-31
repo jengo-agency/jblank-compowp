@@ -264,7 +264,7 @@ function apply_fixes($results, $user_input) {
  */
 function check_composer_dependency() {
     $composer_file = 'composer.json';
-    
+
     if (!file_exists($composer_file)) {
         return [
             'status' => false,
@@ -273,7 +273,7 @@ function check_composer_dependency() {
             'fix_function' => 'fix_composer_dependency'
         ];
     }
-    
+
     $composer_data = json_decode(file_get_contents($composer_file), true);
     if (json_last_error() !== JSON_ERROR_NONE) {
         return [
@@ -283,9 +283,9 @@ function check_composer_dependency() {
             'fix_function' => 'fix_composer_dependency'
         ];
     }
-    
+
     $has_wordpress = isset($composer_data['require']['johnpbloch/wordpress']);
-    
+
     return [
         'status' => $has_wordpress,
         'critical' => false,
@@ -320,7 +320,7 @@ function check_wp_files_clean() {
  */
 function check_wp_config() {
     $config_file = 'wp-config.php';
-    
+
     if (!file_exists($config_file)) {
         return [
             'status' => false,
@@ -329,9 +329,9 @@ function check_wp_config() {
             'fix_function' => 'fix_wp_config'
         ];
     }
-    
+
     $config_content = file_get_contents($config_file);
-    
+
     // Check required constants
     $required_constants = [
         'WP_DEBUG',
@@ -356,20 +356,20 @@ function check_wp_config() {
         'WP_CACHE_KEY_SALT',
         'ABSPATH'
     ];
-    
+
     $missing_constants = [];
     foreach ($required_constants as $constant) {
         if (strpos($config_content, "define('$constant'") === false && strpos($config_content, "define(\"$constant\"") === false) {
             $missing_constants[] = $constant;
         }
     }
-    
+
     // Check ABSPATH
     $abspath_correct = strpos($config_content, "define('ABSPATH', dirname(__FILE__) . '/wp/')") !== false ||
                        strpos($config_content, 'define("ABSPATH", dirname(__FILE__) . "/wp/")') !== false;
-    
+
     $structure_valid = empty($missing_constants) && $abspath_correct;
-    
+
     $message = '';
     if (!$structure_valid) {
         $message_parts = [];
@@ -383,7 +383,7 @@ function check_wp_config() {
     } else {
         $message = 'wp-config.php structure is valid';
     }
-    
+
     return [
         'status' => $structure_valid,
         'critical' => true,
@@ -397,7 +397,7 @@ function check_wp_config() {
  */
 function check_index_php() {
     $index_file = 'index.php';
-    
+
     if (!file_exists($index_file)) {
         return [
             'status' => false,
@@ -406,10 +406,10 @@ function check_index_php() {
             'fix_function' => 'fix_index_php'
         ];
     }
-    
+
     $index_content = file_get_contents($index_file);
     $has_correct_path = strpos($index_content, '/wp/wp-blog-header.php') !== false;
-    
+
     return [
         'status' => $has_correct_path,
         'critical' => true,
@@ -424,12 +424,12 @@ function check_index_php() {
 function check_themes_plugins() {
     $themes_dir = 'wp/wp-content/themes';
     $plugins_dir = 'wp/wp-content/plugins';
-    
+
     $themes_empty = !is_dir($themes_dir) || count(scandir($themes_dir)) <= 2; // . and ..
     $plugins_empty = !is_dir($plugins_dir) || count(scandir($plugins_dir)) <= 2;
-    
+
     $clean = $themes_empty && $plugins_empty;
-    
+
     $message = '';
     if (!$clean) {
         $message_parts = [];
@@ -443,7 +443,7 @@ function check_themes_plugins() {
     } else {
         $message = 'Themes and plugins directories are clean';
     }
-    
+
     return [
         'status' => $clean,
         'critical' => false,
@@ -507,7 +507,7 @@ function check_composer_json($user_input) {
  */
 function fix_composer_dependency() {
     $composer_file = 'composer.json';
-    
+
     if (!file_exists($composer_file)) {
         // Create basic composer.json
         $composer_data = [
@@ -523,7 +523,7 @@ function fix_composer_dependency() {
         }
         $composer_data['require']['johnpbloch/wordpress'] = '*';
     }
-    
+
     file_put_contents($composer_file, json_encode($composer_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     output_success("Added johnpbloch/wordpress dependency to composer.json");
 }
@@ -562,7 +562,7 @@ function fix_wp_config() {
         output_error("Cannot fix wp-config.php: wp-config.sample.php template not found");
         return;
     }
-    
+
     // For now, just copy the sample structure
     // In a real implementation, we'd merge with existing DB settings
     copy($sample_file, $config_file);
@@ -575,19 +575,19 @@ function fix_wp_config() {
 function fix_index_php() {
     $wp_index = 'wp/index.php';
     $root_index = 'index.php';
-    
+
     if (!file_exists($wp_index)) {
         output_error("Cannot fix index.php: wp/index.php not found");
         return;
     }
-    
+
     copy($wp_index, $root_index);
-    
+
     // Modify the path
     $content = file_get_contents($root_index);
     $content = str_replace('/wp-blog-header.php', '/wp/wp-blog-header.php', $content);
     file_put_contents($root_index, $content);
-    
+
     output_success("Created index.php with correct WordPress path");
 }
 
@@ -597,12 +597,12 @@ function fix_index_php() {
 function fix_themes_plugins() {
     $themes_dir = 'wp/wp-content/themes';
     $plugins_dir = 'wp/wp-content/plugins';
-    
+
     if (is_dir($themes_dir)) {
         remove_directory_contents($themes_dir, ['.gitkeep']);
         output_success("Cleaned themes directory");
     }
-    
+
     if (is_dir($plugins_dir)) {
         remove_directory_contents($plugins_dir, ['.gitkeep']);
         output_success("Cleaned plugins directory");
@@ -739,7 +739,7 @@ function remove_directory_contents($dir, $exclude = []) {
     if (!is_dir($dir)) {
         return;
     }
-    
+
     $files = array_diff(scandir($dir), ['.', '..']);
     foreach ($files as $file) {
         if (!in_array($file, $exclude)) {
