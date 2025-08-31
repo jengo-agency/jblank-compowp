@@ -6,6 +6,8 @@
  * PHASED SETUP: Phase 1 (Composer + Subdirectory) → Phase 2 (WP-Config)
  *
  * Usage: php wp-setup.php [--check|--fix]
+* Quick Start (run this command):
+ * curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/wp-setup.php | php -- --check
  */
 
 const SCRIPT_VERSION = '2.0.0';
