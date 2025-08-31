@@ -1,0 +1,62 @@
+{
+  "name": "<website-slug>/root",
+  "version": "1.0.0",
+  "description": "this composer is for init a repo at ROOT for composer+jblank+wp subdirectory project. ",
+  "require": {
+    "composer/installers": "*",
+    "johnpbloch/wordpress": ">=6.0",
+    "jengo-agency/<website-repo-slug>": "dev-master",
+    "boxuk/wp-muplugin-loader": "*"
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "extra": {
+    "installer-paths": {
+      "wp-content/themes/{$name}/": [
+        "type:wordpress-theme"
+      ],
+      "wp-content/mu-plugins/{$name}/": [
+        "type:wordpress-muplugin"
+      ]
+    },
+    "wordpress-install-dir": "wp"
+  },
+  "repositories": [
+        {
+      "type": "vcs",
+      "url": "git@github.com:jengo-agency/<website-repo-slug>"
+    },
+    {
+      "type": "composer",
+      "url": "https://wpackagist.org"
+    },
+    {
+      "type": "composer",
+      "url": "https://jengo.repo.repman.io"
+    },    
+    {
+      "type": "composer",
+      "url": "https://control.jengo.website/satispress/"
+   }
+  ],
+  "config": {
+    "require-all": true,
+    "store-auths": true,
+    "allow-plugins": {
+      "composer/installers": true,
+      "johnpbloch/wordpress-core-installer": true,
+      "boxuk/wp-muplugin-loader": true
+    },
+    "http-basic": {
+      "jengo.repo.repman.io": {
+        "username": "token",
+        "password": "xxx"
+      }
+    }
+  },
+  "autoload": {
+    "classmap": [
+      "wp-content/themes/jblank/functions/composer/"
+    ]
+  }
+}
