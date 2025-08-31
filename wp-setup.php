@@ -372,67 +372,129 @@ function check_wp_config() {
         ];
     }
 
-    $config_content = file_get_contents($config_file);
+    // Try to include and analyze the wp-config.php file
+    $config_analysis = analyze_wp_config_file($config_file);
 
-    // Check required constants
-    $required_constants = [
-        'WP_DEBUG',
-        'WP_HOME',
-        'WP_SITEURL',
-        'WP_CONTENT_DIR',
-        'WP_CONTENT_URL',
-        'DB_NAME',
-        'DB_USER',
-        'DB_PASSWORD',
-        'DB_HOST',
-        'DB_CHARSET',
-        'DB_COLLATE',
-        'AUTH_KEY',
-        'SECURE_AUTH_KEY',
-        'LOGGED_IN_KEY',
-        'NONCE_KEY',
-        'AUTH_SALT',
-        'SECURE_AUTH_SALT',
-        'LOGGED_IN_SALT',
-        'NONCE_SALT',
-        'WP_CACHE_KEY_SALT',
-        'ABSPATH'
-    ];
-
-    $missing_constants = [];
-    foreach ($required_constants as $constant) {
-        if (strpos($config_content, "define('$constant'") === false && strpos($config_content, "define(\"$constant\"") === false) {
-            $missing_constants[] = $constant;
-        }
-    }
-
-    // Check ABSPATH
-    $abspath_correct = strpos($config_content, "define('ABSPATH', dirname(__FILE__) . '/wp/')") !== false ||
-                       strpos($config_content, 'define("ABSPATH", dirname(__FILE__) . "/wp/")') !== false;
-
-    $structure_valid = empty($missing_constants) && $abspath_correct;
-
-    $message = '';
-    if (!$structure_valid) {
-        $message_parts = [];
-        if (!empty($missing_constants)) {
-            $message_parts[] = 'Missing constants: ' . implode(', ', $missing_constants);
-        }
-        if (!$abspath_correct) {
-            $message_parts[] = 'ABSPATH not set correctly for /wp/ subdirectory';
-        }
-        $message = implode('; ', $message_parts);
+    if ($config_analysis['included_successfully']) {
+        // Use actual PHP constant checking
+        return check_wp_config_via_constants($config_analysis);
     } else {
-        $message = 'wp-config.php structure is valid';
+        // File couldn't be analyzed
+        return [
+            'status' => false,
+            'critical' => true,
+            'message' => 'wp-config.php could not be analyzed: ' . $config_analysis['error'],
+            'fix_function' => 'fix_wp_config'
+        ];
     }
+}
+
+/**
+ * Analyze wp-config.php by attempting to include it safely
+ */
+function analyze_wp_config_file($config_file) {
+    // Create a temporary scope to include the file without affecting global scope
+    $constants_before = get_defined_constants();
+
+    $included_successfully = false;
+    $error_message = '';
+
+    try {
+        // Use output buffering to capture any output from the config file
+        ob_start();
+        $included_successfully = include_once($config_file);
+        ob_end_clean();
+
+        if ($included_successfully === false) {
+            $error_message = 'Failed to include wp-config.php';
+        }
+    } catch (Exception $e) {
+        $error_message = 'Error including wp-config.php: ' . $e->getMessage();
+        $included_successfully = false;
+    } catch (Error $e) {
+        $error_message = 'Error including wp-config.php: ' . $e->getMessage();
+        $included_successfully = false;
+    }
+
+    $constants_after = get_defined_constants();
+    $new_constants = array_diff_key($constants_after, $constants_before);
 
     return [
-        'status' => $structure_valid,
+        'included_successfully' => $included_successfully,
+        'error' => $error_message,
+        'new_constants' => $new_constants
+    ];
+}
+
+/**
+ * Check wp-config.php by examining actually defined constants
+ */
+function check_wp_config_via_constants($config_analysis) {
+    $issues = [];
+
+    // Required constants for WordPress
+    $required_constants = [
+        'WP_DEBUG' => 'boolean',
+        'WP_HOME' => 'string',
+        'WP_SITEURL' => 'string',
+        'WP_CONTENT_DIR' => 'string',
+        'WP_CONTENT_URL' => 'string',
+        'DB_NAME' => 'string',
+        'DB_USER' => 'string',
+        'DB_PASSWORD' => 'string',
+        'DB_HOST' => 'string',
+        'DB_CHARSET' => 'string',
+        'DB_COLLATE' => 'string',
+        'AUTH_KEY' => 'string',
+        'SECURE_AUTH_KEY' => 'string',
+        'LOGGED_IN_KEY' => 'string',
+        'NONCE_KEY' => 'string',
+        'AUTH_SALT' => 'string',
+        'SECURE_AUTH_SALT' => 'string',
+        'LOGGED_IN_SALT' => 'string',
+        'NONCE_SALT' => 'string',
+        'WP_CACHE_KEY_SALT' => 'string',
+        'ABSPATH' => 'string'
+    ];
+
+    foreach ($required_constants as $constant => $expected_type) {
+        if (!defined($constant)) {
+            $issues[] = "Missing constant: $constant";
+        } else {
+            $value = constant($constant);
+
+            // Check ABSPATH specifically
+            if ($constant === 'ABSPATH') {
+                $expected_abspath = dirname(__FILE__) . DIRECTORY_SEPARATOR . 'wp';
+                if ($value !== $expected_abspath && $value !== $expected_abspath . DIRECTORY_SEPARATOR) {
+                    $issues[] = "ABSPATH not set correctly for /wp/ subdirectory (current: $value, expected: $expected_abspath)";
+                }
+            }
+
+            // Type validation for other constants
+            elseif ($expected_type === 'boolean' && !is_bool($value)) {
+                $issues[] = "$constant should be boolean (current type: " . gettype($value) . ")";
+            }
+            elseif ($expected_type === 'string' && !is_string($value)) {
+                $issues[] = "$constant should be string (current type: " . gettype($value) . ")";
+            }
+            elseif ($expected_type === 'string' && is_string($value) && empty($value)) {
+                $issues[] = "$constant is empty";
+            }
+        }
+    }
+
+    $is_valid = empty($issues);
+
+    return [
+        'status' => $is_valid,
         'critical' => true,
-        'message' => $message,
+        'message' => $is_valid ? 'wp-config.php structure is valid' : 'wp-config.php issues: ' . implode('; ', $issues),
         'fix_function' => 'fix_wp_config'
     ];
 }
+
+
 
 /**
  * Check if index.php exists and has correct paths
@@ -670,10 +732,75 @@ function fix_wp_config() {
         return;
     }
 
-    // For now, just copy the sample structure
-    // In a real implementation, we'd merge with existing DB settings
-    copy($sample_file, $config_file);
-    output_success("Created wp-config.php from sample template");
+    if (!file_exists($config_file)) {
+        // File doesn't exist, create from sample
+        copy($sample_file, $config_file);
+        output_success("Created wp-config.php from sample template");
+        return;
+    }
+
+    // File exists, update it carefully without overwriting existing settings
+    $existing_content = file_get_contents($config_file);
+    $updated = false;
+
+    // Check and fix ABSPATH if needed
+    $abspath_pattern = '/define\s*\(\s*[\'"]ABSPATH[\'"]\s*,\s*.*?\)\s*;/i';
+    $correct_abspath = "define('ABSPATH', dirname(__FILE__) . '/wp/');";
+
+    if (!preg_match($abspath_pattern, $existing_content) ||
+        !preg_match('/define\s*\(\s*[\'"]ABSPATH[\'"]\s*,\s*dirname\(__FILE__\)\s*\.\s*[\'"]\/wp\/[\'"]\s*\)\s*;/i', $existing_content)) {
+
+        if (preg_match($abspath_pattern, $existing_content)) {
+            // Replace existing ABSPATH
+            $existing_content = preg_replace($abspath_pattern, $correct_abspath, $existing_content);
+        } else {
+            // Add ABSPATH before the require statement
+            $require_pattern = '/require_once\s+[\'"]wp-settings\.php[\'"]\s*;/i';
+            if (preg_match($require_pattern, $existing_content)) {
+                $existing_content = preg_replace($require_pattern, $correct_abspath . "\n\n" . '$0', $existing_content);
+            } else {
+                // Add at the end if no require found
+                $existing_content .= "\n\n" . $correct_abspath;
+            }
+        }
+        $updated = true;
+        output_success("Updated ABSPATH in existing wp-config.php");
+    }
+
+    // Check and add missing constants from sample file if they don't exist
+    $sample_content = file_get_contents($sample_file);
+    $constants_to_check = [
+        'WP_DEBUG',
+        'WP_HOME',
+        'WP_SITEURL',
+        'WP_CONTENT_DIR',
+        'WP_CONTENT_URL'
+    ];
+
+    foreach ($constants_to_check as $constant) {
+        $pattern = '/define\s*\(\s*[\'"]' . preg_quote($constant, '/') . '[\'"]\s*,\s*.*?\)\s*;/i';
+        if (!preg_match($pattern, $existing_content)) {
+            // Find this constant in sample file
+            if (preg_match($pattern, $sample_content, $matches)) {
+                // Add the constant before the require statement
+                $require_pattern = '/require_once\s+[\'"]wp-settings\.php[\'"]\s*;/i';
+                if (preg_match($require_pattern, $existing_content)) {
+                    $existing_content = preg_replace($require_pattern, $matches[0] . "\n" . '$0', $existing_content);
+                } else {
+                    $existing_content .= "\n" . $matches[0];
+                }
+                $updated = true;
+                output_success("Added missing constant: $constant");
+            }
+        }
+    }
+
+    if ($updated) {
+        file_put_contents($config_file, $existing_content);
+        output_success("Updated existing wp-config.php with necessary fixes");
+    } else {
+        output_success("wp-config.php already has correct structure");
+    }
 }
 
 /**
@@ -688,14 +815,28 @@ function fix_index_php() {
         return;
     }
 
-    copy($wp_index, $root_index);
+    if (!file_exists($root_index)) {
+        // File doesn't exist, create it
+        copy($wp_index, $root_index);
+        $content = file_get_contents($root_index);
+        $content = str_replace('/wp-blog-header.php', '/wp/wp-blog-header.php', $content);
+        file_put_contents($root_index, $content);
+        output_success("Created index.php with correct WordPress path");
+        return;
+    }
 
-    // Modify the path
-    $content = file_get_contents($root_index);
-    $content = str_replace('/wp-blog-header.php', '/wp/wp-blog-header.php', $content);
-    file_put_contents($root_index, $content);
+    // File exists, check if it needs updating
+    $existing_content = file_get_contents($root_index);
+    $has_correct_path = strpos($existing_content, '/wp/wp-blog-header.php') !== false;
 
-    output_success("Created index.php with correct WordPress path");
+    if (!$has_correct_path) {
+        // Update the path
+        $existing_content = str_replace('/wp-blog-header.php', '/wp/wp-blog-header.php', $existing_content);
+        file_put_contents($root_index, $existing_content);
+        output_success("Updated index.php with correct WordPress path");
+    } else {
+        output_success("index.php already has correct WordPress path");
+    }
 }
 
 /**
