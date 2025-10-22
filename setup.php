@@ -1021,9 +1021,11 @@ function check_db_url_consistency($mode): bool {
     $expected_siteurl = null;
     if (isset($config_constants['WP_SITEURL'])) {
         $siteurl_value = $config_constants['WP_SITEURL'];
-        // If it's a concatenation, evaluate it
+        // If it's a concatenation, evaluate it by replacing WP_HOME with actual value
         if (strpos($siteurl_value, 'WP_HOME') !== false) {
-            $expected_siteurl = $expected_home . '/wp';
+            $expected_siteurl = str_replace("WP_HOME", $expected_home, $siteurl_value);
+            // Remove quotes if they exist around the whole expression
+            $expected_siteurl = trim($expected_siteurl, "'\"");
         } else {
             $expected_siteurl = trim($siteurl_value, "'\"");
         }
