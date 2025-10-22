@@ -956,6 +956,8 @@ function check_redirect(string $from_url, string $expected_target, string $expec
         return false;
     }
 
+    output_info("Checking redirect: $from_url");
+
     // Get redirect information
     $command = "curl -I -s -w '%{http_code}|%{redirect_url}' --max-time 10 --connect-timeout 5 '$from_url'";
     $output = [];
@@ -964,20 +966,29 @@ function check_redirect(string $from_url, string $expected_target, string $expec
     exec($command, $output, $return_code);
 
     if ($return_code !== 0) {
+        output_error("curl command failed for: $from_url");
         return false; // Command failed
     }
 
     $result = trim(implode('', $output));
     list($status_code, $redirect_url) = explode('|', $result . '|');
 
+    // Debug output - show what we actually received
+    output_info("Received HTTP status: $status_code");
+    if (!empty($redirect_url)) {
+        output_info("Redirect URL: $redirect_url");
+    }
+
     // Check if status code matches expected pattern (301, 302, 307, 308)
     if (!preg_match('/^' . $expected_status_pattern . '$/', $status_code)) {
+        output_error("Status code mismatch - Expected: $expected_status_pattern, Got: $status_code");
         return false;
     }
 
     // Check if redirect URL matches expected target
     $redirect_url = trim($redirect_url);
     if (empty($redirect_url)) {
+        output_error("No redirect URL provided in response");
         return false; // No redirect URL provided
     }
 
@@ -988,7 +999,18 @@ function check_redirect(string $from_url, string $expected_target, string $expec
     }
 
     // Compare redirect target (normalize both URLs)
-    return normalize_url($redirect_url) === normalize_url($expected_target);
+    $normalized_expected = normalize_url($expected_target);
+    $normalized_actual = normalize_url($redirect_url);
+
+    if ($normalized_actual !== $normalized_expected) {
+        output_error("Redirect target mismatch:");
+        output_error("  Expected: $normalized_expected");
+        output_error("  Actual:   $normalized_actual");
+        return false;
+    }
+
+    output_info("Redirect validation successful");
+    return true;
 }
 
 /**
