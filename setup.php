@@ -974,14 +974,30 @@ function check_redirect(string $from_url, string $expected_target, string $expec
     list($status_code, $redirect_url) = explode('|', $result . '|');
 
     // Debug output - show what we actually received
-    output_info("Received HTTP status: $status_code");
+    output_info("Received HTTP response: $status_code");
+
+    // Extract actual status code from HTTP response (e.g., "HTTP/2 301" -> "301")
+    $actual_status = null;
+    if (preg_match('/HTTP\/\d+(?:\.\d+)?\s+(\d{3})/', $status_code, $matches)) {
+        $actual_status = $matches[1];
+    } else if (preg_match('/^\d{3}$/', $status_code)) {
+        $actual_status = $status_code;
+    }
+
+    if ($actual_status) {
+        output_info("Extracted status code: $actual_status");
+    } else {
+        output_error("Could not parse HTTP status code from response: $status_code");
+        return false;
+    }
+
     if (!empty($redirect_url)) {
         output_info("Redirect URL: $redirect_url");
     }
 
     // Check if status code matches expected pattern (301, 302, 307, 308)
-    if (!preg_match('/^' . $expected_status_pattern . '$/', $status_code)) {
-        output_error("Status code mismatch - Expected: $expected_status_pattern, Got: $status_code");
+    if (!preg_match('/^' . $expected_status_pattern . '$/', $actual_status)) {
+        output_error("Status code mismatch - Expected: $expected_status_pattern, Got: $actual_status");
         return false;
     }
 
