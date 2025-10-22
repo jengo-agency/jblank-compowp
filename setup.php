@@ -181,6 +181,18 @@ function run_phase_3($mode, $composer_data): bool {
     }
     output_success("Database connection successful.");
 
+    // 2.5. Check database URL consistency with wp-config.php
+    if (!check_db_url_consistency($mode)) {
+        if ($mode === 'check') {
+            output_error("Database URL consistency check failed.");
+            return false;
+        }
+        // In fix mode, the function already made the necessary changes
+        output_success("Database URL consistency check completed.");
+    } else {
+        output_success("Database URL consistency check passed.");
+    }
+
     // 3. Cleanup Kinsta MU plugin
     if (!cleanup_mu_plugins($mode)) {
         return false;
@@ -201,6 +213,12 @@ function run_phase_3($mode, $composer_data): bool {
 
     // 6. Validate themes
     if (!validate_themes($composer_data)) {
+        return false;
+    }
+
+    // 7. Final check: Verify WP_HOME URL accessibility and security
+    if (!check_wp_home_accessibility()) {
+        output_error("WP_HOME URL accessibility check failed.");
         return false;
     }
 
@@ -818,6 +836,318 @@ function check_database_connection() {
         'message' => 'Database connection successful',
         'fix_function' => null
     ];
+}
+
+/**
+ * Check that WP_HOME URL is accessible and meets security requirements
+ */
+function check_wp_home_accessibility(): bool {
+    // Get WP_HOME from wp-config.php
+    $config_constants = parse_wp_config_constants('wp-config.php');
+
+    if (!isset($config_constants['WP_HOME'])) {
+        output_error("WP_HOME constant not found in wp-config.php");
+        output_error("Please ensure WP_HOME is defined in wp-config.php");
+        return false;
+    }
+
+    $wp_home = trim($config_constants['WP_HOME'], "'\"");
+    output_info("Checking accessibility of WP_HOME: $wp_home");
+
+    // 1. Pre-flight check: WP_HOME must start with https://
+    if (!preg_match('/^https:\/\//', $wp_home)) {
+        output_error("WP_HOME must use HTTPS protocol for security");
+        output_error("Current WP_HOME: $wp_home");
+        output_error("Please update WP_HOME in wp-config.php to use https://");
+        output_error("Example: define('WP_HOME', 'https://yourdomain.com');");
+        return false;
+    }
+    output_success("WP_HOME uses HTTPS protocol");
+
+    // 2. Primary check: WP_HOME must return 200
+    $http_code = get_http_status_code($wp_home);
+    if ($http_code === null) {
+        output_error("Cannot check WP_HOME accessibility");
+        output_error("This may be due to missing curl, network issues, or DNS problems");
+        output_error("Please ensure:");
+        output_error("  - curl is installed and available");
+        output_error("  - DNS resolves correctly for: $wp_home");
+        output_error("  - Site is accessible from this server");
+        return false;
+    }
+
+    if ($http_code !== '200') {
+        output_error("WP_HOME returned HTTP $http_code instead of 200 (OK)");
+        output_error("Site URL: $wp_home");
+        output_error("This indicates the WordPress site is not loading properly");
+        output_error("Please check:");
+        output_error("  - WordPress installation is complete");
+        output_error("  - Web server is running and configured correctly");
+        output_error("  - No server errors (check web server logs)");
+        return false;
+    }
+    output_success("WP_HOME returns HTTP 200 (OK)");
+
+    // 3. Check www redirect (if WP_HOME contains www)
+    if (strpos($wp_home, 'www.') !== false) {
+        $non_www_url = str_replace('www.', '', $wp_home);
+        if (!check_redirect($non_www_url, $wp_home, '301')) {
+            output_error("Missing or incorrect redirect from non-www to www");
+            output_error("Expected: $non_www_url → 301 (Permanent Redirect) → $wp_home");
+            output_error("This affects SEO and user experience");
+            output_error("Please configure your web server or CDN to redirect:");
+            output_error("  $non_www_url → $wp_home (HTTP 301)");
+            return false;
+        }
+        output_success("Non-www to www redirect working correctly (301)");
+    }
+
+    // 4. Check HTTP to HTTPS redirect
+    $http_url = str_replace('https://', 'http://', $wp_home);
+    if (!check_redirect($http_url, $wp_home, '3[0-9][0-9]')) {
+        output_error("Missing or incorrect redirect from HTTP to HTTPS");
+        output_error("Expected: $http_url → 301/302/307/308 → $wp_home");
+        output_error("This is a security requirement - HTTP requests must redirect to HTTPS");
+        output_error("Please configure your web server or CDN to redirect:");
+        output_error("  $http_url → $wp_home (HTTP 301/302/307/308)");
+        return false;
+    }
+    output_success("HTTP to HTTPS redirect working correctly");
+
+    output_success("All URL accessibility checks passed");
+    output_info("WP_HOME is properly configured and accessible");
+    return true;
+}
+
+/**
+ * Get HTTP status code for a URL using curl
+ */
+function get_http_status_code(string $url): ?string {
+    if (!function_exists('exec')) {
+        output_warning("exec() function not available. Cannot check URL accessibility.");
+        return null;
+    }
+
+    // Check if curl is available
+    if (!command_exists('curl')) {
+        output_warning("curl not found. Cannot check URL accessibility.");
+        return null;
+    }
+
+    $command = "curl -I -s -o /dev/null -w '%{http_code}' --max-time 10 --connect-timeout 5 '$url'";
+    $output = [];
+    $return_code = 0;
+
+    exec($command, $output, $return_code);
+
+    if ($return_code !== 0) {
+        return null; // Command failed
+    }
+
+    return trim(implode('', $output));
+}
+
+/**
+ * Check if URL redirects to expected target with expected status code
+ */
+function check_redirect(string $from_url, string $expected_target, string $expected_status_pattern): bool {
+    if (!function_exists('exec') || !command_exists('curl')) {
+        output_warning("Cannot check redirects - curl or exec() not available");
+        return false;
+    }
+
+    // Get redirect information
+    $command = "curl -I -s -w '%{http_code}|%{redirect_url}' --max-time 10 --connect-timeout 5 '$from_url'";
+    $output = [];
+    $return_code = 0;
+
+    exec($command, $output, $return_code);
+
+    if ($return_code !== 0) {
+        return false; // Command failed
+    }
+
+    $result = trim(implode('', $output));
+    list($status_code, $redirect_url) = explode('|', $result . '|');
+
+    // Check if status code matches expected pattern (301, 302, 307, 308)
+    if (!preg_match('/^' . $expected_status_pattern . '$/', $status_code)) {
+        return false;
+    }
+
+    // Check if redirect URL matches expected target
+    $redirect_url = trim($redirect_url);
+    if (empty($redirect_url)) {
+        return false; // No redirect URL provided
+    }
+
+    // Handle relative redirects by making them absolute
+    if (!preg_match('/^https?:\/\//', $redirect_url)) {
+        $parsed_url = parse_url($from_url);
+        $redirect_url = $parsed_url['scheme'] . '://' . $parsed_url['host'] . $redirect_url;
+    }
+
+    // Compare redirect target (normalize both URLs)
+    return normalize_url($redirect_url) === normalize_url($expected_target);
+}
+
+/**
+ * Normalize URL for comparison (remove trailing slash, standardize protocol)
+ */
+function normalize_url(string $url): string {
+    $url = rtrim($url, '/');
+    $url = preg_replace('/^http:/', 'https:', $url); // Normalize to https
+    return $url;
+}
+
+/**
+ * Check that home and siteurl in database are consistent with wp-config.php constants
+ */
+function check_db_url_consistency($mode): bool {
+    global $mode;
+
+    // Get constants from wp-config.php
+    $config_constants = parse_wp_config_constants('wp-config.php');
+
+    if (!isset($config_constants['WP_HOME'])) {
+        output_error("WP_HOME constant not found in wp-config.php");
+        return false;
+    }
+
+    // Evaluate WP_HOME constant (remove quotes)
+    $expected_home = trim($config_constants['WP_HOME'], "'\"");
+
+    // Evaluate WP_SITEURL constant (it might be a concatenation like WP_HOME . '/wp')
+    $expected_siteurl = null;
+    if (isset($config_constants['WP_SITEURL'])) {
+        $siteurl_value = $config_constants['WP_SITEURL'];
+        // If it's a concatenation, evaluate it
+        if (strpos($siteurl_value, 'WP_HOME') !== false) {
+            $expected_siteurl = $expected_home . '/wp';
+        } else {
+            $expected_siteurl = trim($siteurl_value, "'\"");
+        }
+    } else {
+        output_error("WP_SITEURL constant not found in wp-config.php");
+        return false;
+    }
+
+    output_info("Expected from wp-config.php - Home: $expected_home, SiteURL: $expected_siteurl");
+
+    // Connect to database to check current values
+    $db_host = DB_HOST;
+    $db_user = DB_USER;
+    $db_password = DB_PASSWORD;
+    $db_name = DB_NAME;
+
+    $connection = @mysqli_connect($db_host, $db_user, $db_password, $db_name);
+    if (!$connection) {
+        output_error("Cannot connect to database to check URL consistency");
+        return false;
+    }
+
+    // Check if options table exists (for fresh installations)
+    $table_check = mysqli_query($connection, "SHOW TABLES LIKE 'wp_options'");
+    if (mysqli_num_rows($table_check) === 0) {
+        mysqli_close($connection);
+        output_warning("WordPress options table not found. Skipping URL consistency check (fresh install)");
+        return true;
+    }
+
+    // Get current home and siteurl from database
+    $query = "SELECT option_name, option_value FROM wp_options WHERE option_name IN ('home', 'siteurl')";
+    $result = mysqli_query($connection, $query);
+
+    if (!$result) {
+        mysqli_close($connection);
+        output_error("Failed to query options table: " . mysqli_error($connection));
+        return false;
+    }
+
+    $current_home = null;
+    $current_siteurl = null;
+
+    while ($row = mysqli_fetch_assoc($result)) {
+        if ($row['option_name'] === 'home') {
+            $current_home = $row['option_value'];
+        } elseif ($row['option_name'] === 'siteurl') {
+            $current_siteurl = $row['option_value'];
+        }
+    }
+
+    mysqli_close($connection);
+
+    // Check if we got both values
+    if ($current_home === null || $current_siteurl === null) {
+        output_warning("Home or SiteURL not found in database options table");
+        return true; // Not a blocking error for fresh installs
+    }
+
+    output_info("Current in database - Home: $current_home, SiteURL: $current_siteurl");
+
+    // Compare values
+    $home_match = ($current_home === $expected_home);
+    $siteurl_match = ($current_siteurl === $expected_siteurl);
+
+    if ($home_match && $siteurl_match) {
+        output_success("Database URLs are consistent with wp-config.php");
+        return true;
+    }
+
+    // Report discrepancies
+    if (!$home_match) {
+        output_warning("Database home URL mismatch - DB: '$current_home', Config: '$expected_home'");
+    }
+    if (!$siteurl_match) {
+        output_warning("Database siteurl mismatch - DB: '$current_siteurl', Config: '$expected_siteurl'");
+    }
+
+    // Fix mode - update database
+    if ($mode === 'fix') {
+        output_info("Fixing database URL inconsistencies...");
+
+        $connection = @mysqli_connect($db_host, $db_user, $db_password, $db_name);
+        if (!$connection) {
+            output_error("Cannot connect to database to fix URL consistency");
+            return false;
+        }
+
+        $updates_made = 0;
+
+        if (!$home_match) {
+            $update_query = "UPDATE wp_options SET option_value = '" . mysqli_real_escape_string($connection, $expected_home) . "' WHERE option_name = 'home'";
+            if (mysqli_query($connection, $update_query)) {
+                output_success("Updated database home URL to: $expected_home");
+                $updates_made++;
+            } else {
+                output_error("Failed to update home URL: " . mysqli_error($connection));
+            }
+        }
+
+        if (!$siteurl_match) {
+            $update_query = "UPDATE wp_options SET option_value = '" . mysqli_real_escape_string($connection, $expected_siteurl) . "' WHERE option_name = 'siteurl'";
+            if (mysqli_query($connection, $update_query)) {
+                output_success("Updated database siteurl to: $expected_siteurl");
+                $updates_made++;
+            } else {
+                output_error("Failed to update siteurl: " . mysqli_error($connection));
+            }
+        }
+
+        mysqli_close($connection);
+
+        if ($updates_made > 0) {
+            output_success("Database URL consistency fixed");
+            return true;
+        } else {
+            output_error("Failed to fix database URL consistency");
+            return false;
+        }
+    }
+
+    // Check mode - just report the issue
+    output_error("Database URLs are inconsistent with wp-config.php. Run with --fix to update database.");
+    return false;
 }
 
 /**

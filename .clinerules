@@ -1,0 +1,32 @@
+# WordPress Composer Setup Rules
+# Project: jblank-compowp - WordPress with Composer and subdirectory structure
+
+## Project Architecture
+Maintain WordPress core isolation in /wp/ subdirectory while keeping wp-content at root level. Ensure all WordPress core files (wp-admin, wp-includes, etc.) remain contained within the /wp/ directory structure.
+
+## File Organization
+Preserve established file hierarchy: WordPress core in /wp/, themes in wp-content/themes/, plugins in wp-content/plugins/, configuration files at root level. Keep root directory clean of WordPress core files except index.php and wp-config.php.
+
+## Configuration Management
+Handle wp-config.php with proper constant definitions (WP_HOME, WP_SITEURL, WP_CONTENT_DIR, ABSPATH). Maintain composer.json structure with johnpbloch/wordpress dependency and jengo-agency theme repositories. Preserve database credentials and authentication salts during modifications.
+
+## Development Workflow
+Work with Composer-based dependency management for WordPress core, themes, and plugins. Support both interactive and non-interactive setup modes. Maintain Repman token configuration for private repositories.
+
+## Code Standards
+Ensure PHP 8.0+ compatibility with robust error handling and graceful fallbacks. Use phased execution approach (Composer setup → wp-config → verification). Implement comprehensive validation before applying fixes.
+
+## Testing & Validation
+Verify WordPress installation integrity after any changes. Test database connectivity and theme activation. Ensure logging directory setup and MU plugin cleanup. Validate file permissions and directory structure.
+
+## Environment Compatibility
+Support nginx environments without .htaccess dependencies. Handle environments where exec() function is disabled. Provide clear manual instructions when automation isn't available.
+
+## User Experience
+Provide clear, colored output for different message types (success, error, warning, info). Support both --check (validation) and --fix (repair) modes. Maintain backward compatibility with existing installations.
+
+## Security & Best Practices
+Never expose or modify database credentials during setup. Create configuration backups before making changes. Validate all user inputs and sanitize file operations. Maintain single-site WordPress installations only.
+
+## Integration Points
+Support curl-based initial setup from GitHub repository. Maintain compatibility with existing WordPress installations during conversion. Preserve custom themes and plugins during cleanup operations.
