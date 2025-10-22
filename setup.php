@@ -12,6 +12,89 @@
 
 const SCRIPT_VERSION = '2.0.0';
 const REQUIRED_PHP_VERSION = '8.0';
+const MIN_COMPOSER_VERSION = '2.8';
+
+const JENGO_ORG = 'jengo-agency';
+const PARENT_THEME = 'jblank';
+const KINSTA_MU_PLUGIN = 'wp-content/mu-plugins/kinsta-mu-plugins.php';
+
+const REQUIRED_PHP_EXTENSIONS = ['mysqli', 'curl', 'json', 'mbstring', 'zip'];
+
+/**
+ * Check if all required PHP extensions are available
+ */
+function check_php_extensions(): bool {
+    $missing_extensions = [];
+
+    foreach (REQUIRED_PHP_EXTENSIONS as $extension) {
+        if (!extension_loaded($extension)) {
+            $missing_extensions[] = $extension;
+        }
+    }
+
+    if (empty($missing_extensions)) {
+        output_success("All required PHP extensions are available");
+        return true;
+    }
+
+    foreach ($missing_extensions as $extension) {
+        output_error("Missing required PHP extension: $extension");
+    }
+
+    output_error("Please install the missing extensions:");
+    output_error("  - Ubuntu/Debian: apt-get install php-{extension} (e.g., php-mysqli, php-curl)");
+    output_error("  - CentOS/RHEL: yum install php-{extension} (or dnf for newer versions)");
+    output_error("  - macOS: brew install php@{required_version} (or use pecl install {extension})");
+    output_error("  - Or add to your php.ini: extension={extension}.so");
+    return false;
+}
+
+/**
+ * Check if Composer is available and meets minimum version
+ */
+function check_composer_version(): bool {
+    if (!command_exists('composer')) {
+        output_error("Composer not found in system PATH");
+        output_error("Please install Composer:");
+        output_error("  - curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer");
+        output_error("  - Or follow instructions at: https://getcomposer.org/download/");
+        return false;
+    }
+
+    // Get composer version
+    $command = 'composer --version 2>&1';
+    $output = [];
+    $return_code = 0;
+    exec($command, $output, $return_code);
+
+    if ($return_code !== 0) {
+        output_error("Failed to get Composer version");
+        return false;
+    }
+
+    $version_output = trim(implode(' ', $output));
+
+    // Extract version number
+    if (preg_match('/Version (\d+\.\d+\.\d+)/i', $version_output, $matches)) {
+        $version = $matches[1];
+
+        if (version_compare($version, MIN_COMPOSER_VERSION, '>=')) {
+            output_success("Composer $version is available (minimum required: " . MIN_COMPOSER_VERSION . ")");
+            return true;
+        } else {
+            output_error("Composer version $version is too old");
+            output_error("Please upgrade Composer to version " . MIN_COMPOSER_VERSION . " or later");
+            output_error("Upgrade command: composer self-update");
+            return false;
+        }
+    }
+
+    output_error("Could not parse Composer version from output: $version_output");
+    return false;
+}
+
+const WP_DIR_PERMISSIONS = 0755;
+const WP_FILE_PERMISSIONS = 0644;
 
 const WP_FILES_TO_CLEAN = [
     'wp-admin', 'wp-includes', 'wp-activate.php', 'wp-blog-header.php',
@@ -41,6 +124,14 @@ function output_info($message) {
 // Check PHP version
 if (version_compare(PHP_VERSION, REQUIRED_PHP_VERSION, '<')) {
     output_error("PHP " . REQUIRED_PHP_VERSION . " or higher is required. Current version: " . PHP_VERSION);
+    exit(1);
+}
+
+// Run pre-flight checks (before downloading samples)
+if (!check_php_extensions()) {
+    exit(1);
+}
+if (!check_composer_version()) {
     exit(1);
 }
 
@@ -197,12 +288,20 @@ function run_phase_3($mode, $composer_data): bool {
     if (!cleanup_mu_plugins($mode)) {
         return false;
     }
-    
+
     // 4. Setup logging directory
     if (!setup_logging_directory($mode)) {
         return false;
     }
-    
+
+    // Check file permissions (WordPress standard)
+    if (!check_file_permissions($mode)) {
+        return false;
+    }
+
+    // Check environment settings (informational)
+    check_environment_settings();
+
     // 5. Bootstrap WordPress to check environment and themes
     if (!file_exists('wp/wp-load.php')) {
         output_error("wp/wp-load.php not found. Cannot bootstrap WordPress.");
@@ -792,17 +891,12 @@ function get_composer_defaults(): array {
 }
 
 /**
- * Check database connection using credentials from wp-config.php
+ * Get a database connection for reuse
  */
-function check_database_connection() {
+function get_db_connection(): ?mysqli {
     // Check if database constants are defined
     if (!defined('DB_HOST') || !defined('DB_USER') || !defined('DB_PASSWORD') || !defined('DB_NAME')) {
-        return [
-            'status' => false,
-            'critical' => true,
-            'message' => 'Database constants not defined in wp-config.php',
-            'fix_function' => null
-        ];
+        return null;
     }
 
     $db_host = DB_HOST;
@@ -824,7 +918,39 @@ function check_database_connection() {
         $error_message = mysqli_connect_error();
         output_error("Database connection failed: $error_message");
         output_error("Please check your database credentials in wp-config.php");
-        exit(1); // Halt the script
+        return null;
+    }
+
+    return $connection;
+}
+
+/**
+ * Check if we can connect to the database
+ */
+function is_interactive(): bool {
+    return defined('STDIN') && is_resource(STDIN) &&
+           function_exists('posix_isatty') && posix_isatty(STDIN);
+}
+
+/**
+ * Clean constant values by removing surrounding quotes
+ */
+function clean_constant_value(string $value): string {
+    return trim($value, "'\"");
+}
+
+/**
+ * Check database connection using credentials from wp-config.php
+ */
+function check_database_connection() {
+    $connection = get_db_connection();
+    if (!$connection) {
+        return [
+            'status' => false,
+            'critical' => true,
+            'message' => 'Database connection failed',
+            'fix_function' => null
+        ];
     }
 
     // Connection successful
@@ -1656,4 +1782,105 @@ function remove_directory_contents($dir, $exclude = []) {
             }
         }
     }
+}
+
+/**
+ * Check file and directory permissions for WordPress content
+ */
+function check_file_permissions($mode): bool {
+    $issues_found = 0;
+
+    // Directories to check (should be 755)
+    $directories_to_check = [
+        'wp-content',
+        'wp-content/themes',
+        'wp-content/plugins',
+        'wp-content/uploads'
+    ];
+
+    foreach ($directories_to_check as $dir) {
+        if (is_dir($dir)) {
+            $perms = fileperms($dir) & 0777;
+            if ($perms !== WP_DIR_PERMISSIONS) {
+                output_warning("Directory permissions issue: $dir");
+                output_warning("Current: " . sprintf('0%o', $perms) . " (should be " . sprintf('0%o', WP_DIR_PERMISSIONS) . ")");
+
+                if ($mode === 'fix') {
+                    if (chmod($dir, WP_DIR_PERMISSIONS)) {
+                        output_success("Fixed permissions for: $dir");
+                    } else {
+                        output_error("Failed to fix permissions for: $dir");
+                        $issues_found++;
+                    }
+                } else {
+                    $issues_found++;
+                }
+            }
+        } else if ($dir === 'wp-content/uploads') {
+            // uploads directory may not exist yet, that's ok
+            continue;
+        } else {
+            output_warning("Directory missing: $dir");
+            if ($mode === 'fix') {
+                if (mkdir($dir, WP_DIR_PERMISSIONS, true)) {
+                    output_success("Created directory: $dir");
+                } else {
+                    output_error("Failed to create directory: $dir");
+                    $issues_found++;
+                }
+            } else {
+                $issues_found++;
+            }
+        }
+    }
+
+    if ($issues_found === 0) {
+        output_success("All WordPress file permissions are correct");
+        return true;
+    } elseif ($mode === 'check') {
+        output_error("File permission issues found (see warnings above)");
+        return false;
+    }
+
+    // In fix mode, success if we fixed everything that could be fixed
+    output_success("File permission check completed (issues resolved where possible)");
+    return true;
+}
+
+/**
+ * Check environment configuration (informational only)
+ */
+function check_environment_settings(): void {
+    // Parse wp-config.php constants
+    $constants = parse_wp_config_constants('wp-config.php');
+
+    // Check WP_DEBUG setting
+    if (isset($constants['WP_DEBUG'])) {
+        $debug_value = strtolower(trim($constants['WP_DEBUG'], " \t\n\r\0\x0B'\""));
+        if ($debug_value === 'true' || $debug_value === '1') {
+            output_warning("WP_DEBUG is enabled - consider disabling in production");
+            output_info("To disable: define('WP_DEBUG', false); in wp-config.php");
+        } else {
+            output_info("WP_DEBUG is disabled (production ready)");
+        }
+    } else {
+        output_info("WP_DEBUG not explicitly set (defaults to false)");
+    }
+
+    // Check WP_ENVIRONMENT_TYPE setting
+    if (isset($constants['WP_ENVIRONMENT_TYPE'])) {
+        $env_type = clean_constant_value($constants['WP_ENVIRONMENT_TYPE']);
+        output_info("WP_ENVIRONMENT_TYPE set to: $env_type");
+        if ($env_type === 'production' && isset($constants['WP_DEBUG']) && strtolower(clean_constant_value($constants['WP_DEBUG'])) === 'true') {
+            output_warning("WP_ENVIRONMENT_TYPE is 'production' but WP_DEBUG is enabled - inconsistency detected");
+        }
+    } else {
+        output_info("WP_ENVIRONMENT_TYPE not set - consider adding for better environment detection");
+        output_info("Recommended: define('WP_ENVIRONMENT_TYPE', 'production'); in wp-config.php");
+    }
+
+    // Additional informational checks could go here
+    // - WordPress version
+    // - PHP version compatibility
+    // - etc.
 }
