@@ -1023,9 +1023,28 @@ function check_db_url_consistency($mode): bool {
         $siteurl_value = $config_constants['WP_SITEURL'];
         // If it's a concatenation, evaluate it by replacing WP_HOME with actual value
         if (strpos($siteurl_value, 'WP_HOME') !== false) {
-            $expected_siteurl = str_replace("WP_HOME", $expected_home, $siteurl_value);
-            // Remove quotes if they exist around the whole expression
-            $expected_siteurl = trim($expected_siteurl, "'\"");
+            // Replace WP_HOME with the actual value
+            $evaluated = str_replace("WP_HOME", "'$expected_home'", $siteurl_value);
+
+            // Handle concatenation by splitting on the . operator and evaluating each part
+            if (strpos($evaluated, ' . ') !== false) {
+                // Split by concatenation operator
+                $parts = explode(' . ', $evaluated);
+
+                // Clean each part and concatenate
+                $result_parts = [];
+                foreach ($parts as $part) {
+                    $part = trim($part);
+                    // Remove surrounding quotes if they exist
+                    $part = trim($part, "'\"");
+                    $result_parts[] = $part;
+                }
+
+                $expected_siteurl = implode('', $result_parts);
+            } else {
+                // No concatenation, just remove quotes
+                $expected_siteurl = trim($evaluated, "'\"");
+            }
         } else {
             $expected_siteurl = trim($siteurl_value, "'\"");
         }
