@@ -1100,7 +1100,7 @@ function check_redirect(string $from_url, string $expected_target, string $expec
     list($status_code, $redirect_url) = explode('|', $result . '|');
 
     // Debug output - show what we actually received
-    output_info("Received HTTP response: $status_code");
+    //output_info("Received HTTP response: $status_code");
 
     // Extract actual status code from HTTP response (e.g., "HTTP/2 301" -> "301")
     $actual_status = null;
