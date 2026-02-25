@@ -1,0 +1,116 @@
+name: Compowp deployment workflow. Cannot be run standalone, must be called from a parent workflow with the appropriate JSON configuration and secrets.
+
+on:
+  workflow_call:
+    inputs:
+      config_json:
+        description: "The JSON configuration object (DEPLOY_CONFIG)"
+        required: true
+        type: string
+    secrets:
+      # This allows the workflow to access 'GLOBAL_KEY' and any dynamic 'PROD_KEY' from the Caller Repository (using secrets: inherit)
+      GLOBAL_KEY:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # ---------------------------------------------------------
+      # STEP 1: LOAD CONFIGURATION
+      #    - Parses the JSON Input based on the current branch
+      # ---------------------------------------------------------
+      - name: 🔍 Load Environment Config
+        id: config
+        run: |
+          # 1. Determine Branch (Handle Dispatch vs Push)
+          # Note: In a reusable workflow, github.event_name comes from the CALLER workflow.
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+             # Default to main for dispatch events
+             REF_NAME="refs/heads/main"
+             TRIGGER_SOURCE="Sub-Package: ${{ github.event.client_payload.package_name }}"
+          else
+             REF_NAME="${{ github.ref }}"
+             TRIGGER_SOURCE="Manual Push: ${{ github.actor }}"
+          fi
+
+          echo "TRIGGER_SOURCE=$TRIGGER_SOURCE" >> $GITHUB_ENV
+
+          # 2. Extract Config from JSON Input
+          # Use the 'inputs.config_json' passed from the caller
+          CONFIG='${{ toJSON(fromJSON(inputs.config_json)) }}'
+          
+          # Logic to pick the Target Ref (Main vs Dispatch target)
+          TARGET_REF=${{ github.event_name == 'repository_dispatch' && 'refs/heads/main' || github.ref }}
+
+          # 3. Export Variables
+          echo "ENV_NAME=${{ fromJSON(inputs.config_json)[TARGET_REF].env_name }}" >> $GITHUB_ENV
+          echo "SECRET_PREFIX=${{ fromJSON(inputs.config_json)[TARGET_REF].secret_prefix }}" >> $GITHUB_ENV
+          echo "DEPLOY_HOST=${{ fromJSON(inputs.config_json)[TARGET_REF].host }}" >> $GITHUB_ENV
+          echo "DEPLOY_PORT=${{ fromJSON(inputs.config_json)[TARGET_REF].port }}" >> $GITHUB_ENV
+          echo "DEPLOY_USER=${{ fromJSON(inputs.config_json)[TARGET_REF].user }}" >> $GITHUB_ENV
+          echo "DEPLOY_PATH=${{ fromJSON(inputs.config_json)[TARGET_REF].path }}" >> $GITHUB_ENV
+
+      # ---------------------------------------------------------
+      # STEP 2: EXECUTE DEPLOYMENT
+      # ---------------------------------------------------------
+      - name: 🚀 Deploy to ${{ env.ENV_NAME }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          port: ${{ env.DEPLOY_PORT }}
+          username: ${{ env.DEPLOY_USER }}
+
+          # KEY FALLBACK LOGIC:
+          # 1. Look for specific key in Caller's secrets (e.g. STAGING_KEY)
+          # 2. If missing, use GLOBAL_KEY from Caller's secrets
+          key: ${{ secrets[format('{0}_KEY', env.SECRET_PREFIX)] || secrets.GLOBAL_KEY }}
+
+          # Increase timeout for Composer
+          command_timeout: 30m
+
+          script: |
+            # 1. Start at Home (as requested)
+            cd ~
+            echo "🔌 Connected to $(hostname) as $(whoami)"
+
+            # 2. Go to Project
+            cd ${{ env.DEPLOY_PATH }}
+            echo "📂 Working in: $(pwd)"
+
+            echo "🔄 Update triggered by: ${{ env.TRIGGER_SOURCE }}"
+
+            # ---------------------------------------------------
+            # 3. SMART UPDATE (Lock File Diff)
+            # ---------------------------------------------------
+
+            # A. Snapshot current lock file
+            [ -f composer.lock ] && cp composer.lock composer.lock.old || echo "{}" > composer.lock.old
+
+            echo "📦 Running Composer Update..."
+
+            # B. Run Update (Capture errors to log)
+            # Using 'touch' to prove write access
+            touch probe.txt
+            composer update --no-interaction --prefer-dist --optimize-autoloader > update.log 2>&1
+            EXIT_CODE=$?
+
+            # C. Trigger PHP Logger
+            # (Uncomment when you have uploaded the script)
+            # php scripts/deployment_logger.php \
+            #    --before="composer.lock.old" \
+            #    --after="composer.lock" \
+            #    --log="update.log" \
+            #    --code=$EXIT_CODE \
+            #    --trigger="${{ env.TRIGGER_SOURCE }}"
+
+            # D. Cleanup
+            # rm composer.lock.old update.log
+
+            # E. Handle Failure
+            if [ $EXIT_CODE -ne 0 ]; then
+                echo "❌ Deployment Failed. Check logs."
+                exit 1
+            else
+                echo "✅ Deployment Successful."
+            fi
