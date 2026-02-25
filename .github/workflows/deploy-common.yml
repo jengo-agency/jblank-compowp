@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
 name: Compowp deployment workflow. Cannot be run standalone, must be called from a parent workflow with the appropriate JSON configuration and secrets.
 
 on:
@@ -20,13 +21,13 @@ jobs:
       # STEP 1: LOAD CONFIGURATION
       #    - Parses the JSON Input based on the current branch
       # ---------------------------------------------------------
-       - name: 🔍 Load Environment Config
+      - name: 🔍 Load Environment Config
         id: config
         run: |
           # 1. Dump the JSON input to a file so jq can read it
           # We wrap it in single quotes to handle special characters safely
           echo '${{ inputs.config_json }}' > deploy_config.json
-          
+
           # 2. Determine Target Branch (Shell Logic)
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
              TARGET_REF="refs/heads/main"
@@ -35,15 +36,15 @@ jobs:
              TARGET_REF="${{ github.ref }}"
              TRIGGER_SOURCE="Manual Push: ${{ github.actor }}"
           fi
-          
+
           echo "TRIGGER_SOURCE=$TRIGGER_SOURCE" >> $GITHUB_ENV
           echo "Using Target Ref: $TARGET_REF"
 
           # 3. Extract Values using JQ
           # usage: jq -r --arg key "$VAR" '.[$key].field' file.json
-          
+
           ENV_NAME=$(jq -r --arg ref "$TARGET_REF" '.[$ref].env_name // empty' deploy_config.json)
-          
+
           # Safety Check
           if [ -z "$ENV_NAME" ]; then
             echo "❌ No configuration found for: $TARGET_REF"
@@ -59,7 +60,6 @@ jobs:
           echo "DEPLOY_PORT=$(jq -r --arg ref "$TARGET_REF" '.[$ref].port' deploy_config.json)" >> $GITHUB_ENV
           echo "DEPLOY_USER=$(jq -r --arg ref "$TARGET_REF" '.[$ref].user' deploy_config.json)" >> $GITHUB_ENV
           echo "DEPLOY_PATH=$(jq -r --arg ref "$TARGET_REF" '.[$ref].path' deploy_config.json)" >> $GITHUB_ENV
-
 
       # ---------------------------------------------------------
       # STEP 2: EXECUTE DEPLOYMENT
