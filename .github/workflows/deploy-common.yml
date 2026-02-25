@@ -17,10 +17,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # ---------------------------------------------------------
-      # STEP 1: LOAD CONFIGURATION
-      #    - Parses the JSON Input based on the current branch
-      # ---------------------------------------------------------
+      # STEP 1: LOAD CONFIGURATION : Parses the JSON Input based on the current branch
       - name: 🔍 Load Environment Config
         id: config
         run: |
@@ -61,9 +58,7 @@ jobs:
           echo "DEPLOY_USER=$(jq -r --arg ref "$TARGET_REF" '.[$ref].user' deploy_config.json)" >> $GITHUB_ENV
           echo "DEPLOY_PATH=$(jq -r --arg ref "$TARGET_REF" '.[$ref].path' deploy_config.json)" >> $GITHUB_ENV
 
-      # ---------------------------------------------------------
       # STEP 2: EXECUTE DEPLOYMENT
-      # ---------------------------------------------------------
       - name: 🚀 Deploy to ${{ env.ENV_NAME }}
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -90,9 +85,7 @@ jobs:
 
             echo "🔄 Update triggered by: ${{ env.TRIGGER_SOURCE }}"
 
-            # ---------------------------------------------------
             # 3. SMART UPDATE (Lock File Diff)
-            # ---------------------------------------------------
 
             # A. Snapshot current lock file
             [ -f composer.lock ] && cp composer.lock composer.lock.old || echo "{}" > composer.lock.old
