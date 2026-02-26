@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
+name: Dada Deploy
+
+on:
+  push:
+    branches: [ "main", "staging" ]
+  workflow_dispatch:
+
+  # Listen for "global-update" signal
+  repository_dispatch:
+    types: [ "global-update" ]
+
+jobs:
+  call-central-workflow:
+    # This acts like your "Symlink" to the global logic
+    uses: jengo-agency/jblank-compowp/.github/workflows/deploy-common.yml@main
+    with:
+      # Pass the configuration for THIS project
+      config_json: |
+        {
+          "refs/heads/main": {
+            "env_name": "Production",
+            "secret_prefix": "PROD",
+            "host": "35.198.113.119",
+            "port": "58177",
+            "user": "revuedada",
+            "path": "$HOME/public"
+          },
+          "refs/heads/staging": {
+            "env_name": "Staging",
+            "secret_prefix": "STAGING",
+            "host": "35.198.113.119",
+            "port": "15478",
+            "user": "revuedada",
+            "path": "$HOME/public"
+          }
+        }
+    secrets:
+      # Pass the secrets automatically
+      GLOBAL_KEY: ${{ secrets.GLOBAL_KEY }}
