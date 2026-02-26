@@ -255,7 +255,13 @@ function run_phase_1(array $user_input): array {
  * PHASE 3: Installation verification
  */
 function run_phase_3($mode, $composer_data): bool {
-    // 1. Load wp-config.php to make DB constants available
+
+    // 1. Cleanup Kinsta MU plugin, will crash otherwise
+    if (!cleanup_mu_plugins($mode)) {
+        return false;
+    }
+
+    // 2. Load wp-config.php to make DB constants available
     if (file_exists('wp-config.php')) {
         // Use a function to include the file to scope it
         include_wp_config();
@@ -264,7 +270,7 @@ function run_phase_3($mode, $composer_data): bool {
         return false;
     }
 
-    // 2. Test DB connection
+    // 3. Test DB connection
     $db_check = check_database_connection();
     if (!$db_check['status']) {
         output_error("Database connection check failed. " . $db_check['message']);
@@ -282,11 +288,6 @@ function run_phase_3($mode, $composer_data): bool {
         output_success("Database URL consistency check completed.");
     } else {
         output_success("Database URL consistency check passed.");
-    }
-
-    // 3. Cleanup Kinsta MU plugin
-    if (!cleanup_mu_plugins($mode)) {
-        return false;
     }
 
     // 4. Setup logging directory
@@ -1365,6 +1366,7 @@ function check_composer_json($mode) {
 }
 
 function check_wp_dependency($composer_data, $mode) {
+    echo("checking wp dependency");
     if (!isset($composer_data['require']['johnpbloch/wordpress'])) {
         if ($mode === 'check') {
             output_error("WordPress dependency is missing from composer.json.");
@@ -1372,6 +1374,8 @@ function check_wp_dependency($composer_data, $mode) {
             $composer_data['require']['johnpbloch/wordpress'] = '*';
             output_success("Added johnpbloch/wordpress dependency.");
         }
+    }else{
+        output_success("johnpbloch/wordpress was ok");
     }
     return $composer_data;
 }
@@ -1382,10 +1386,14 @@ function check_repman($composer_data, $mode) {
                       $composer_data['config']['http-basic']['jengo.repo.repman.io']['password'] !== 'xxx';
 
     if (!$token_configured) {
+        output_error("Repman token not configured.");
         if ($mode === 'check') {
-            output_error("Repman token not configured.");
+            
         } else {
             $is_interactive = defined('STDIN') && is_resource(STDIN) && function_exists('posix_isatty') && posix_isatty(STDIN);
+            if ($is_interactive) {
+                echo "Please enter your Repman token: ";
+            }
             $token = $is_interactive ? trim(fgets(STDIN)) : getenv('WP_SETUP_REPMAN_TOKEN');
 
             if (empty($token)) {
