@@ -94,8 +94,10 @@ jobs:
 
             # B. Run Update (Capture errors to log)
             # Using 'touch' to prove write access
-            touch probe.txt
-            composer update --no-interaction --prefer-dist --optimize-autoloader > update.log 2>&1
+            echo "" >> update.log
+            echo "🔄 Update starting at $(date '+%Y-%m-%d %H:%M:%S') triggered by ${{ env.TRIGGER_SOURCE }}" >> update.log
+            COMPOSER_FUND=0 composer update --no-interaction  --no-progress --prefer-dist --optimize-autoloader >> update.log 2>&1
+            echo "🔄 Update end" >> update.log
             EXIT_CODE=$?
 
             # C. Trigger PHP Logger
