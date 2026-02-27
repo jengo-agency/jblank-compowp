@@ -11,7 +11,7 @@
  */
 
 const SCRIPT_VERSION = '2.0.0';
-const REQUIRED_PHP_VERSION = '8.0';
+const REQUIRED_PHP_VERSION = '8.2';
 const MIN_COMPOSER_VERSION = '2.8';
 
 const JENGO_ORG = 'jengo-agency';
@@ -127,6 +127,18 @@ if (version_compare(PHP_VERSION, REQUIRED_PHP_VERSION, '<')) {
     exit(1);
 }
 
+// Enforce CLI mode
+if (php_sapi_name() !== 'cli') {
+    output_error("This script must be run from the command line.");
+    exit(1);
+}
+
+// Enforce exec availability
+if (!function_exists('exec') || !function_exists('shell_exec')) {
+    output_error("The 'exec' and 'shell_exec' functions are required but not available.");
+    exit(1);
+}
+
 // Run pre-flight checks (before downloading samples)
 if (!check_php_extensions()) {
     exit(1);
@@ -199,10 +211,67 @@ $phase3_success = run_phase_3($mode, $user_input_phase1);
 
 if($phase3_success) {
     output_success("✅ Phase 3 completed successfully!");
-    output_success("🎉 WordPress setup completed successfully!");
 } else {
     output_error("Phase 3 verification failed.");
     exit(1);
+}
+
+// PHASE 4: Server Environment Setup
+output_info("🖥️  PHASE 4: Server Environment Setup");
+$phase4_success = run_log_purge_setup($mode);
+
+if ($phase4_success) {
+    output_success("✅ Phase 4 completed successfully!");
+} else {
+    output_warning("Phase 4 completed with warnings.");
+}
+
+output_success("🎉 WordPress setup completed successfully!");
+
+/**
+ * Download and execute a remote shell script safely
+ */
+function execute_remote_shell(string $script_url, string $mode, string $script_name = 'script'): bool {
+    output_info("Setting up $script_name...");
+    
+    if ($mode === 'check') {
+        output_info("$script_name would be downloaded and executed in fix mode.");
+        return true;
+    }
+
+    $result = fetch_url($script_url, true);
+    if ($result === null || $result['http_code'] !== '200') {
+        output_error("Failed to download $script_name from $script_url");
+        return false;
+    }
+
+    $tmp_file = sys_get_temp_dir() . '/' . $script_name . '_' . uniqid() . '.sh';
+    if (file_put_contents($tmp_file, $result['body']) === false) {
+        output_error("Failed to write temporary script for $script_name.");
+        return false;
+    }
+    chmod($tmp_file, 0755);
+
+    output_info("Executing $script_name...");
+    $output = shell_exec($tmp_file . ' 2>&1');
+    unlink($tmp_file);
+
+    if ($output === null) {
+        output_error("Failed to execute $script_name.");
+        return false;
+    }
+
+    output_info("$script_name output:\n" . trim((string)$output));
+    output_success("$script_name executed.");
+    return true;
+}
+
+/**
+ * Run log purge setup script
+ */
+function run_log_purge_setup(string $mode): bool {
+    $url = 'https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/install-log-purge.sh';
+    return execute_remote_shell($url, $mode, 'log-purge');
 }
 
 /**
@@ -411,8 +480,8 @@ function validate_themes(array $composer_data): bool {
     // Extract all jengo-agency theme slugs from composer data
     if (isset($composer_data['require'])) {
         foreach ($composer_data['require'] as $pkg => $version) {
-            if (strpos($pkg, 'jengo-agency/') === 0) {
-                $parts = explode('/', $pkg);
+            if (str_starts_with((string)$pkg, 'jengo-agency/')) {
+                $parts = explode('/', (string)$pkg);
                 $jengo_themes[] = end($parts);
             }
         }
@@ -620,7 +689,7 @@ function update_wp_config_constants(string $config_file, array $required_definit
     }
 
     // Check if the autoload script is missing
-    if (strpos($content, "/vendor/autoload.php") === false) {
+    if (!str_contains($content, "/vendor/autoload.php")) {
         $lines_to_prepend[] = "\n// Include Composer's autoloader";
         $lines_to_prepend[] = "if (file_exists(__DIR__ . '/vendor/autoload.php')) {";
         $lines_to_prepend[] = "    require_once __DIR__ . '/vendor/autoload.php';";
@@ -639,7 +708,7 @@ function update_wp_config_constants(string $config_file, array $required_definit
 
     // Finally, check and fix ABSPATH using the simple and robust parsing method.
     $correct_abspath_value = "__DIR__ . '/wp/'";
-    if (!isset($existing_constants['ABSPATH']) || strpos($existing_constants['ABSPATH'], '/wp/') === false) {
+    if (!isset($existing_constants['ABSPATH']) || !str_contains((string)$existing_constants['ABSPATH'], '/wp/')) {
         output_warning("ABSPATH is missing or incorrect. " . ($mode=='fix'?"Fixing...":""));
         // This pattern will find the define() line for ABSPATH, regardless of its current value.
         $pattern = '/^\s*define\s*\(\s*[\'"]ABSPATH[\'"]\s*,\s*.*?\s*\)\s*;/m';
@@ -698,7 +767,7 @@ function validate_wp_config_final_parsing(string $config_file, array $required_d
     }
 
     // Add a specific check for ABSPATH
-    if (!isset($final_constants['ABSPATH']) || strpos($final_constants['ABSPATH'], '/wp/') === false) {
+    if (!isset($final_constants['ABSPATH']) || !str_contains((string)$final_constants['ABSPATH'], '/wp/')) {
         $errors[] = "Constant 'ABSPATH' is missing or incorrect. It should point to the '/wp/' directory.";
     }
 
@@ -725,18 +794,18 @@ function download_sample_files() {
 
     $files_to_download = [
         'wp-config.sample.php' => $base_url . 'wp-config.sample.php',
-        'composer.sample.json' => $base_url . 'composer.sample.json'
+        'composer.template.json' => $base_url . 'composer.template.json'
     ];
 
     foreach ($files_to_download as $local_file => $remote_url) {
         if (!file_exists($local_file)) {
             output_info("Downloading $local_file...");
-            $content = @file_get_contents($remote_url);
-            if ($content === false) {
+            $result = fetch_url($remote_url, true);
+            if ($result === null || $result['http_code'] !== '200') {
                 output_error("Failed to download $local_file from $remote_url");
                 exit(1);
             }
-            file_put_contents($local_file, $content);
+            file_put_contents($local_file, $result['body']);
             output_success("Downloaded $local_file");
         }
     }
@@ -862,7 +931,7 @@ function get_composer_defaults(): array {
     // Extract repo slug from repositories or require
     if (isset($composer_data['repositories'])) {
         foreach ($composer_data['repositories'] as $repo) {
-            if (isset($repo['url']) && strpos($repo['url'], 'jengo-agency/') !== false) {
+            if (isset($repo['url']) && str_contains((string)$repo['url'], 'jengo-agency/')) {
                 $url_parts = explode('/', $repo['url']);
                 if (count($url_parts) > 1) {
                     $repo_name = end($url_parts);
@@ -878,7 +947,7 @@ function get_composer_defaults(): array {
     // Extract branch from require versions
     if (isset($composer_data['require'])) {
         foreach ($composer_data['require'] as $package => $version) {
-            if (strpos($package, 'jengo-agency/') !== false && $version !== '*') {
+            if (str_contains((string)$package, 'jengo-agency/') && $version !== '*') {
                 // Extract branch name from version constraint like "dev-main"
                 if (preg_match('/^dev-([a-zA-Z0-9-]+)$/', $version, $matches)) {
                     $defaults['branch_name'] = $matches[1]; // Extract "main" from "dev-main"
@@ -1016,7 +1085,7 @@ function check_wp_home_accessibility(): bool {
     output_success("WP_HOME returns HTTP 200 (OK)");
 
     // 3. Check www redirect (if WP_HOME contains www)
-    if (strpos($wp_home, 'www.') !== false) {
+    if (str_contains($wp_home, 'www.')) {
         $non_www_url = str_replace('www.', '', $wp_home);
         if (!check_redirect($non_www_url, $wp_home, '301')) {
             output_error("Missing or incorrect redirect from non-www to www");
@@ -1047,76 +1116,64 @@ function check_wp_home_accessibility(): bool {
 }
 
 /**
- * Get HTTP status code for a URL using curl
+ * Fetch HTTP URL using native cURL
  */
-function get_http_status_code(string $url): ?string {
-    if (!function_exists('exec')) {
-        output_warning("exec() function not available. Cannot check URL accessibility.");
+function fetch_url(string $url, bool $fetch_body = false): ?array {
+    $ch = curl_init($url);
+    if ($ch === false) {
         return null;
     }
 
-    // Check if curl is available
-    if (!command_exists('curl')) {
-        output_warning("curl not found. Cannot check URL accessibility.");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => !$fetch_body,
+        CURLOPT_NOBODY => !$fetch_body,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_FOLLOWLOCATION => false,
+    ]);
+
+    $response = curl_exec($ch);
+    if ($response === false) {
+        curl_close($ch);
         return null;
     }
 
-    $command = "curl -I -s -o /dev/null -w '%{http_code}' --max-time 10 --connect-timeout 5 '$url'";
-    $output = [];
-    $return_code = 0;
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $redirect_url = curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+    curl_close($ch);
 
-    exec($command, $output, $return_code);
-
-    if ($return_code !== 0) {
-        return null; // Command failed
-    }
-
-    return trim(implode('', $output));
+    return [
+        'body' => $fetch_body ? $response : null,
+        'http_code' => (string) $http_code,
+        'redirect_url' => $redirect_url ? trim($redirect_url) : null
+    ];
 }
 
 /**
- * Check if URL redirects to expected target with expected status code
+ * Get HTTP status code for a URL using native cURL
+ */
+function get_http_status_code(string $url): ?string {
+    $meta = fetch_url($url, false);
+    return $meta ? $meta['http_code'] : null;
+}
+
+/**
+ * Check if URL redirects to expected target with expected status code using native cURL
  */
 function check_redirect(string $from_url, string $expected_target, string $expected_status_pattern): bool {
-    if (!function_exists('exec') || !command_exists('curl')) {
-        output_warning("Cannot check redirects - curl or exec() not available");
-        return false;
-    }
-
     output_info("Checking redirect: $from_url");
 
-    // Get redirect information
-    $command = "curl -I -s -w '%{http_code}|%{redirect_url}' --max-time 10 --connect-timeout 5 '$from_url'";
-    $output = [];
-    $return_code = 0;
-
-    exec($command, $output, $return_code);
-
-    if ($return_code !== 0) {
-        output_error("curl command failed for: $from_url");
-        return false; // Command failed
-    }
-
-    $result = trim(implode('', $output));
-    list($status_code, $redirect_url) = explode('|', $result . '|');
-
-    // Debug output - show what we actually received
-    //output_info("Received HTTP response: $status_code");
-
-    // Extract actual status code from HTTP response (e.g., "HTTP/2 301" -> "301")
-    $actual_status = null;
-    if (preg_match('/HTTP\/\d+(?:\.\d+)?\s+(\d{3})/', $status_code, $matches)) {
-        $actual_status = $matches[1];
-    } else if (preg_match('/^\d{3}$/', $status_code)) {
-        $actual_status = $status_code;
-    }
-
-    if ($actual_status) {
-        output_info("Extracted status code: $actual_status");
-    } else {
-        output_error("Could not parse HTTP status code from response: $status_code");
+    $meta = fetch_url($from_url, false);
+    if (!$meta) {
+        output_error("curl failed for: $from_url");
         return false;
     }
+
+    $actual_status = $meta['http_code'];
+    $redirect_url = $meta['redirect_url'];
+
+    output_info("Extracted status code: $actual_status");
 
     if (!empty($redirect_url)) {
         output_info("Redirect URL: $redirect_url");
@@ -1187,12 +1244,12 @@ function check_db_url_consistency($mode): bool {
     if (isset($config_constants['WP_SITEURL'])) {
         $siteurl_value = $config_constants['WP_SITEURL'];
         // If it's a concatenation, evaluate it by replacing WP_HOME with actual value
-        if (strpos($siteurl_value, 'WP_HOME') !== false) {
+        if (str_contains((string)$siteurl_value, 'WP_HOME')) {
             // Replace WP_HOME with the actual value
-            $evaluated = str_replace("WP_HOME", "'$expected_home'", $siteurl_value);
+            $evaluated = str_replace("WP_HOME", "'$expected_home'", (string)$siteurl_value);
 
             // Handle concatenation by splitting on the . operator and evaluating each part
-            if (strpos($evaluated, ' . ') !== false) {
+            if (str_contains($evaluated, ' . ')) {
                 // Split by concatenation operator
                 $parts = explode(' . ', $evaluated);
 
@@ -1347,9 +1404,9 @@ function check_composer_json($mode) {
             exit(1);
         }
         // In fix mode, start with the sample file content
-        $sample_file = 'composer.sample.json';
+        $sample_file = 'composer.template.json';
         if (!file_exists($sample_file)) {
-            output_error("composer.sample.json not found. Cannot create composer.json.");
+            output_error("composer.template.json not found. Cannot create composer.json.");
             exit(1);
         }
         output_warning("composer.json not found, creating from sample.");
@@ -1415,7 +1472,7 @@ function check_repository($composer_data, $user_input, $mode) {
     if ($mode !== 'fix') {
         // In check mode, just report if placeholders are found
         $content = json_encode($composer_data);
-        if (strpos($content, '<website-slug>') !== false || strpos($content, '<website-repo-slug>') !== false) {
+        if (str_contains($content, '<website-slug>') || str_contains($content, '<website-repo-slug>')) {
             output_error("Repository placeholders found in composer.json.");
         } else {
             output_success("Repository configuration appears correct.");
@@ -1446,7 +1503,7 @@ function check_repository($composer_data, $user_input, $mode) {
         $repo_updated = false;
         if (isset($composer_data['repositories'])) {
             foreach ($composer_data['repositories'] as &$repo) {
-                if (isset($repo['type']) && $repo['type'] === 'vcs' && isset($repo['url']) && strpos($repo['url'], 'jengo-agency') !== false) {
+                if (isset($repo['type']) && $repo['type'] === 'vcs' && isset($repo['url']) && str_contains((string)$repo['url'], 'jengo-agency')) {
                     $repo['url'] = 'git@github.com:jengo-agency/' . $repo_slug;
                     $repo_updated = true;
                     break;
@@ -1618,7 +1675,7 @@ function check_index_php($mode): bool {
 
     if (file_exists($root_index)) {
         $content = file_get_contents($root_index);
-        if (strpos($content, $correct_path) !== false) {
+        if (str_contains($content, $correct_path)) {
             output_success("Root index.php is correctly configured.");
             $is_ok = true;
         } else {
@@ -1685,15 +1742,6 @@ function fix_themes_plugins() {
 function run_composer_install() {
     output_info("Running composer install to create WordPress structure...");
 
-    // Check if exec() function is available
-    if (!function_exists('exec')) {
-        output_warning("exec() function is not available in this environment.");
-        output_info("Please run the following command manually:");
-        output_info("composer install --no-dev --optimize-autoloader");
-        output_info("Or: php composer.phar install --no-dev --optimize-autoloader");
-        return false;
-    }
-
     // Check if composer is available
     $composer_command = 'composer';
     if (!command_exists($composer_command)) {
@@ -1741,11 +1789,6 @@ function run_composer_install() {
  * Check if a command exists in the system
  */
 function command_exists($command) {
-    // If exec() is not available, we can't check
-    if (!function_exists('exec')) {
-        return false;
-    }
-
     $which_command = "which $command 2>/dev/null";
     exec($which_command, $output, $return_code);
     return $return_code === 0;
