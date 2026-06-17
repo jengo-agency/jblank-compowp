@@ -3,11 +3,11 @@
 /**
  * WordPress Composer Setup Script v2.0
  *
- * PHASED SETUP: Phase 1 (Composer + Subdirectory) → Phase 2 (WP-Config)
+ * PHASED SETUP: Phase 1 (Composer + Subdirectory) → Phase 2 (WP-Config) → Phase 3 (Verify) → Phase 4 (Server)
  *
- * Usage: php wp-setup.php [--check|--fix]
-* Quick Start (run this command):
- * curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/setup.php | php -- --check
+ * Usage: php shell-setup.php [--check|--fix]
+ * Quick Start (run this command):
+ * curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --check
  */
 
 const SCRIPT_VERSION = '2.0.0';
@@ -154,10 +154,26 @@ output_info("WordPress Composer Setup Tool v" . SCRIPT_VERSION);
 output_info("Working directory: " . getcwd());
 
 // Parse command line arguments
-$mode = 'check'; // default mode
 $args = $argv;
 array_shift($args); // remove script name
 
+if (empty($args)) {
+    echo "\n";
+    output_info("WordPress Composer Setup Tool v" . SCRIPT_VERSION);
+    echo "\n";
+    echo "  Usage:   php shell-setup.php [--check|--fix]\n";
+    echo "\n";
+    echo "  --check  Read-only audit: reports what is wrong without changing anything\n";
+    echo "  --fix    Applies all fixes: composer install, wp-config, theme activation\n";
+    echo "\n";
+    echo "  Quick start (run directly on the server):\n";
+    echo "    curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --check\n";
+    echo "    curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --fix\n";
+    echo "\n";
+    exit(0);
+}
+
+$mode = 'check';
 foreach ($args as $arg) {
     if ($arg === '--fix') {
         $mode = 'fix';
@@ -165,7 +181,7 @@ foreach ($args as $arg) {
         $mode = 'check';
     } else {
         output_error("Unknown argument: $arg");
-        output_info("Usage: php wp-setup.php [--check|--fix]");
+        output_info("Usage: php shell-setup.php [--check|--fix]");
         exit(1);
     }
 }
@@ -227,6 +243,10 @@ if ($phase4_success) {
 }
 
 output_success("🎉 WordPress setup completed successfully!");
+
+if ($mode === 'fix') {
+    output_info("Next step: run 'composer setup' to configure git identity and SSH access for the theme repo.");
+}
 
 /**
  * Download and execute a remote shell script safely
@@ -377,6 +397,10 @@ function run_phase_3($mode, $composer_data): bool {
         output_error("wp/wp-load.php not found. Cannot bootstrap WordPress.");
         return false;
     }
+    // Plugins like Polylang call pll_get_requested_url() during init which
+    // requires these $_SERVER keys. Stub them when running in CLI.
+    $_SERVER['HTTP_HOST']   ??= 'localhost';
+    $_SERVER['REQUEST_URI'] ??= '/';
     require_once 'wp/wp-load.php';
     output_success("WordPress environment bootstrapped successfully.");
 
@@ -492,7 +516,7 @@ function validate_themes(array $composer_data): bool {
         return false;
     }
 
-    // Clear theme cache before checking
+    // Clear theme cache and fetch once
     wp_clean_themes_cache();
     $all_themes = wp_get_themes();
     $expected_theme_repo = '';
@@ -514,7 +538,6 @@ function validate_themes(array $composer_data): bool {
         $expected_theme_repo = $jengo_themes[0];
     }
 
-
     if (empty($expected_theme_repo)) {
         // Fallback to the first theme if child detection fails
         $expected_theme_repo = $jengo_themes[0];
@@ -522,10 +545,6 @@ function validate_themes(array $composer_data): bool {
     }
 
     output_info("Expected theme from composer.json: $expected_theme_repo");
-
-    // Clear theme cache before checking
-    wp_clean_themes_cache();
-    $all_themes = wp_get_themes();
     $jblank_found = false;
     $project_theme_found = false;
 
@@ -570,11 +589,55 @@ function validate_themes(array $composer_data): bool {
 
     if ($validation_passed) {
         output_success("Theme validation passed.");
+        cleanup_default_themes($all_themes, $active_theme_slug);
     } else {
         output_error("Theme validation failed.");
     }
 
     return $validation_passed;
+}
+
+/**
+ * Offer to remove bundled WordPress default (twenty*) themes when a custom theme is active.
+ */
+function cleanup_default_themes(array $all_themes, string $active_theme_slug): void {
+    $twenty_themes = [];
+    foreach (array_keys($all_themes) as $slug) {
+        if (str_starts_with($slug, 'twenty') && $slug !== $active_theme_slug) {
+            $twenty_themes[] = $slug;
+        }
+    }
+
+    if (empty($twenty_themes)) {
+        return;
+    }
+
+    output_warning("Found default WordPress themes that are not in use: " . implode(', ', $twenty_themes));
+
+    if (!is_interactive()) {
+        output_warning("Run interactively with --fix to be prompted for removal.");
+        return;
+    }
+
+    global $mode;
+    if ($mode !== 'fix') {
+        return;
+    }
+
+    echo "Remove these default themes to keep the installation clean? [y/N]: ";
+    $answer = strtolower(trim(fgets(STDIN)));
+    if ($answer !== 'y' && $answer !== 'yes') {
+        output_info("Skipping default theme removal.");
+        return;
+    }
+
+    foreach ($twenty_themes as $slug) {
+        $theme_dir = get_theme_root() . '/' . $slug;
+        if (is_dir($theme_dir)) {
+            remove_directory($theme_dir);
+            output_success("Removed theme: $slug");
+        }
+    }
 }
 
 
@@ -817,9 +880,7 @@ function download_sample_files() {
 function get_phase1_user_input(): array {
     $input = [];
 
-    // Check if we're running in an interactive environment
-    $is_interactive = defined('STDIN') && is_resource(STDIN) &&
-                     function_exists('posix_isatty') && posix_isatty(STDIN);
+    $is_interactive = is_interactive();
 
     // Get defaults from existing composer.json if it exists
     $defaults = get_composer_defaults();
@@ -873,9 +934,7 @@ function get_phase1_user_input(): array {
 function get_phase2_user_input(): array {
     $input = [];
 
-    // Check if we're running in an interactive environment
-    $is_interactive = defined('STDIN') && is_resource(STDIN) &&
-                     function_exists('posix_isatty') && posix_isatty(STDIN);
+    $is_interactive = is_interactive();
 
     // Get current values from wp-config.php if it exists
     $current_values = get_current_wp_config_values();
@@ -1447,7 +1506,7 @@ function check_repman($composer_data, $mode) {
         if ($mode === 'check') {
             
         } else {
-            $is_interactive = defined('STDIN') && is_resource(STDIN) && function_exists('posix_isatty') && posix_isatty(STDIN);
+            $is_interactive = is_interactive();
             if ($is_interactive) {
                 echo "Please enter your Repman token: ";
             }
