@@ -13,22 +13,41 @@ Run it via curl directly on the server — no git clone needed.
 |------|-------------|
 | `--check` | Read-only audit: reports what is wrong without changing anything |
 | `--fix` | Applies all fixes: updates composer.json, runs `composer install`, fixes wp-config, activates theme |
+| `--website=<url>` | Website URL, required to run `--fix` non-interactively (see below) |
 
 If no flag is given, a help message is displayed.
 
-### Quick Start
+`--fix` asks questions (theme repo, website URL, Repman token, ...). Running it
+non-interactively (e.g. piped from `curl`) without `--website` would silently
+apply guessed defaults instead of your real setup, so the script refuses and
+explains how to proceed instead.
+
+### Quick Start (interactive, recommended)
+
+Download the script first so it can prompt you on the terminal, then run it:
 
 ```bash
-# Audit only (safe, no changes)
-curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --check
+curl -o shell-setup.php https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php
 
-# Full setup / repair
-curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --fix
+# Audit only (safe, no changes)
+php shell-setup.php --check
+
+# Full setup / repair — prompts for theme repo, website URL, Repman token, etc.
+php shell-setup.php --fix
 ```
 
 After a successful `--fix` run, configure git/SSH access for the theme repo:
 ```bash
 composer setup
+```
+
+### Automation / CI (non-interactive)
+
+For scripted use, pass `--website` explicitly; other values can be supplied
+via the `WP_SETUP_*` environment variables (see the script for the full list):
+
+```bash
+curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --fix --website=https://example.com
 ```
 
 ---

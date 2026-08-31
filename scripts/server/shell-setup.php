@@ -17,6 +17,7 @@ const MIN_COMPOSER_VERSION = '2.8';
 const JENGO_ORG = 'jengo-agency';
 const PARENT_THEME = 'jblank';
 const KINSTA_MU_PLUGIN = 'wp-content/mu-plugins/kinsta-mu-plugins.php';
+const OBJECT_CACHE_DROPIN = 'wp-content/object-cache.php';
 
 const REQUIRED_PHP_EXTENSIONS = ['mysqli', 'curl', 'json', 'mbstring', 'zip'];
 
@@ -161,32 +162,57 @@ if (empty($args)) {
     echo "\n";
     output_info("WordPress Composer Setup Tool v" . SCRIPT_VERSION);
     echo "\n";
-    echo "  Usage:   php shell-setup.php [--check|--fix]\n";
+    echo "  Usage:   php shell-setup.php [--check|--fix] [--website=<url>]\n";
     echo "\n";
-    echo "  --check  Read-only audit: reports what is wrong without changing anything\n";
-    echo "  --fix    Applies all fixes: composer install, wp-config, theme activation\n";
+    echo "  --check          Read-only audit: reports what is wrong without changing anything\n";
+    echo "  --fix            Applies all fixes: composer install, wp-config, theme activation\n";
+    echo "  --website=<url>  Website URL, for --fix in automation (non-interactive). Without\n";
+    echo "                   it, --fix requires an interactive terminal so it can prompt you.\n";
     echo "\n";
-    echo "  Quick start (run directly on the server):\n";
-    echo "    curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --check\n";
-    echo "    curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --fix\n";
+    echo "  Quick start, interactive (recommended — run directly on the server):\n";
+    echo "    curl -o shell-setup.php https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php\n";
+    echo "    php shell-setup.php --check\n";
+    echo "    php shell-setup.php --fix\n";
+    echo "\n";
+    echo "  Automation / CI (non-interactive, requires --website):\n";
+    echo "    curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --fix --website=https://example.com\n";
     echo "\n";
     exit(0);
 }
 
 $mode = 'check';
+$website_arg = null;
 foreach ($args as $arg) {
     if ($arg === '--fix') {
         $mode = 'fix';
     } elseif ($arg === '--check') {
         $mode = 'check';
+    } elseif (str_starts_with($arg, '--website=')) {
+        $website_arg = substr($arg, strlen('--website='));
     } else {
         output_error("Unknown argument: $arg");
-        output_info("Usage: php shell-setup.php [--check|--fix]");
+        output_info("Usage: php shell-setup.php [--check|--fix] [--website=<url>]");
         exit(1);
     }
 }
 
 output_info("Running in " . strtoupper($mode) . " mode");
+
+// --fix with no TTY and no --website would silently apply guessed defaults
+// (mywebsite, example.com, ...) which is never what you actually want.
+if ($mode === 'fix' && $website_arg === null && !is_interactive()) {
+    output_error("Refusing to run --fix non-interactively without --website=<url>.");
+    output_error("Without a terminal to prompt you and without --website, --fix would silently");
+    output_error("apply guessed defaults (mywebsite, example.com, ...) instead of your real setup.");
+    echo "\n";
+    output_info("To fix this, either:");
+    output_info("  1. Run interactively (recommended) — download the script, then run it locally so it can prompt you:");
+    output_info("       curl -o shell-setup.php https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php");
+    output_info("       php shell-setup.php --fix");
+    output_info("  2. Or run non-interactively for automation, by specifying the website explicitly:");
+    output_info("       curl -s https://raw.githubusercontent.com/jengo-agency/jblank-compowp/main/scripts/server/shell-setup.php | php -- --fix --website=https://example.com");
+    exit(1);
+}
 
 // PHASED EXECUTION FLOW
 
@@ -307,6 +333,7 @@ function run_phase_1(array $user_input): array {
     $composer_data = check_repository($composer_data, $user_input, $mode);
 
     if ($mode === 'fix') {
+        $composer_data = normalize_composer_json_object_fields($composer_data);
         file_put_contents('composer.json', json_encode($composer_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         output_success("composer.json updated successfully.");
     }
@@ -347,6 +374,11 @@ function run_phase_3($mode, $composer_data): bool {
 
     // 1. Cleanup Kinsta MU plugin, will crash otherwise
     if (!cleanup_mu_plugins($mode)) {
+        return false;
+    }
+
+    // 1.5. Cleanup stray object-cache.php drop-in, will crash otherwise
+    if (!cleanup_object_cache_dropin($mode)) {
         return false;
     }
 
@@ -443,6 +475,31 @@ function cleanup_mu_plugins($mode): bool {
         }
     } else {
         output_info("Kinsta MU plugin not found (which is good).");
+    }
+    return true;
+}
+
+/**
+ * Cleanup a stray wp-content/object-cache.php drop-in.
+ *
+ * This project does not use an external object cache. A leftover drop-in
+ * (often injected by the host, e.g. Kinsta's Redis integration) will fatal
+ * WordPress if it tries to connect to a memcache/redis backend that isn't
+ * configured here.
+ */
+function cleanup_object_cache_dropin($mode): bool {
+    if (file_exists(OBJECT_CACHE_DROPIN)) {
+        output_warning("Found object-cache.php drop-in at: " . OBJECT_CACHE_DROPIN);
+        if ($mode === 'fix') {
+            if (unlink(OBJECT_CACHE_DROPIN)) {
+                output_success("Removed object-cache.php drop-in.");
+            } else {
+                output_error("Failed to remove object-cache.php drop-in.");
+                return false;
+            }
+        }
+    } else {
+        output_info("object-cache.php drop-in not found (which is good).");
     }
     return true;
 }
@@ -601,6 +658,7 @@ function validate_themes(array $composer_data): bool {
  * Offer to remove bundled WordPress default (twenty*) themes when a custom theme is active.
  */
 function cleanup_default_themes(array $all_themes, string $active_theme_slug): void {
+    global $website_arg;
     $twenty_themes = [];
     foreach (array_keys($all_themes) as $slug) {
         if (str_starts_with($slug, 'twenty') && $slug !== $active_theme_slug) {
@@ -614,7 +672,7 @@ function cleanup_default_themes(array $all_themes, string $active_theme_slug): v
 
     output_warning("Found default WordPress themes that are not in use: " . implode(', ', $twenty_themes));
 
-    if (!is_interactive()) {
+    if (!is_interactive() || $website_arg !== null) {
         output_warning("Run interactively with --fix to be prompted for removal.");
         return;
     }
@@ -878,9 +936,12 @@ function download_sample_files() {
  * Get Phase 1 user input for composer setup (repo name, slug, branch)
  */
 function get_phase1_user_input(): array {
+    global $website_arg;
     $input = [];
 
-    $is_interactive = is_interactive();
+    // --website is an explicit request for non-interactive automation, so it
+    // always wins even if a TTY happens to be attached (e.g. CI with a pty).
+    $is_interactive = is_interactive() && $website_arg === null;
 
     // Get defaults from existing composer.json if it exists
     $defaults = get_composer_defaults();
@@ -913,8 +974,11 @@ function get_phase1_user_input(): array {
 
 
     } else {
-        // Non-interactive mode - use defaults or environment variables
-        $input['website_slug'] = getenv('WP_SETUP_WEBSITE_SLUG') ?: $defaults['website_slug'] ?: 'mywebsite';
+        // Non-interactive mode - use --website, environment variables, or defaults
+        $website_domain = $website_arg ? normalize_domain($website_arg) : getenv('WP_SETUP_WEBSITE_DOMAIN');
+        $slug_from_website = $website_domain ? extract_slug_from_url($website_domain) : null;
+
+        $input['website_slug'] = getenv('WP_SETUP_WEBSITE_SLUG') ?: $slug_from_website ?: $defaults['website_slug'] ?: 'mywebsite';
         $input['website_repo_slug'] = getenv('WP_SETUP_WEBSITE_REPO_SLUG') ?: $defaults['website_repo_slug'] ?: ($input['website_slug'] . '-theme');
         $input['branch_name'] = getenv('WP_SETUP_BRANCH_NAME') ?: $defaults['branch_name'] ?: 'dev-main';
 
@@ -932,9 +996,10 @@ function get_phase1_user_input(): array {
  * Get Phase 2 user input for website URL (after wp-config exists)
  */
 function get_phase2_user_input(): array {
+    global $website_arg;
     $input = [];
 
-    $is_interactive = is_interactive();
+    $is_interactive = is_interactive() && $website_arg === null;
 
     // Get current values from wp-config.php if it exists
     $current_values = get_current_wp_config_values();
@@ -949,12 +1014,14 @@ function get_phase2_user_input(): array {
         $input['website_domain'] = normalize_domain($domain_input ?: $domain_default);
 
     } else {
-        // Non-interactive mode - use defaults or environment variables
-        $input['website_domain'] = getenv('WP_SETUP_WEBSITE_DOMAIN') ?: ($current_values['WP_HOME'] ?: 'https://example.com');
+        // Non-interactive mode - use --website, environment variables, or defaults
+        $input['website_domain'] = ($website_arg ? normalize_domain($website_arg) : null)
+            ?: getenv('WP_SETUP_WEBSITE_DOMAIN')
+            ?: ($current_values['WP_HOME'] ?: 'https://example.com');
 
         output_warning("Running in non-interactive mode. Using defaults:");
         output_warning("Website domain: {$input['website_domain']}");
-        output_warning("Set WP_SETUP_WEBSITE_DOMAIN environment variable to customize.");
+        output_warning("Set --website=<url> or the WP_SETUP_WEBSITE_DOMAIN environment variable to customize.");
     }
 
     return $input;
@@ -1453,6 +1520,28 @@ function check_db_url_consistency($mode): bool {
 }
 
 /**
+ * Composer requires these fields to be JSON objects, even when empty.
+ * json_decode(..., true) turns an empty JSON object ("{}") into an empty PHP
+ * array, and json_encode() then writes an empty array back out as "[]",
+ * which fails Composer's schema validation ("Array value found, but an
+ * object is required"). Force them back to objects before encoding.
+ */
+const COMPOSER_JSON_OBJECT_FIELDS = [
+    'require', 'require-dev', 'scripts', 'scripts-descriptions',
+    'extra', 'config', 'autoload', 'autoload-dev',
+    'provide', 'replace', 'conflict', 'suggest', 'support',
+];
+
+function normalize_composer_json_object_fields(array $composer_data): array {
+    foreach (COMPOSER_JSON_OBJECT_FIELDS as $field) {
+        if (isset($composer_data[$field]) && is_array($composer_data[$field]) && empty($composer_data[$field])) {
+            $composer_data[$field] = new stdClass();
+        }
+    }
+    return $composer_data;
+}
+
+/**
  * Check and optionally fix johnpbloch/wordpress dependency in composer.json
  */
 function check_composer_json($mode) {
@@ -1497,6 +1586,7 @@ function check_wp_dependency($composer_data, $mode) {
 }
 
 function check_repman($composer_data, $mode) {
+    global $website_arg;
     $token_configured = isset($composer_data['config']['http-basic']['jengo.repo.repman.io']['password']) &&
                       !empty($composer_data['config']['http-basic']['jengo.repo.repman.io']['password']) &&
                       $composer_data['config']['http-basic']['jengo.repo.repman.io']['password'] !== 'xxx';
@@ -1504,9 +1594,9 @@ function check_repman($composer_data, $mode) {
     if (!$token_configured) {
         output_error("Repman token not configured.");
         if ($mode === 'check') {
-            
+
         } else {
-            $is_interactive = is_interactive();
+            $is_interactive = is_interactive() && $website_arg === null;
             if ($is_interactive) {
                 echo "Please enter your Repman token: ";
             }
