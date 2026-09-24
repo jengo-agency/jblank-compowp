@@ -1297,10 +1297,17 @@ function fetch_url(string $url, bool $fetch_body = false): ?array {
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HEADER => !$fetch_body,
-        CURLOPT_NOBODY => !$fetch_body,
+        // Always issue a GET, not HEAD: some WAFs/edge firewalls (Kinsta,
+        // Cloudflare, ModSecurity, ...) block HEAD requests or requests
+        // with no User-Agent outright, returning a false-positive 403.
+        CURLOPT_NOBODY => false,
         CURLOPT_TIMEOUT => 10,
         CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; jblank-compowp-setup-check/1.0; +https://github.com/jengo-agency/jblank-compowp)',
+        CURLOPT_HTTPHEADER => [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        ],
     ]);
 
     $response = curl_exec($ch);
