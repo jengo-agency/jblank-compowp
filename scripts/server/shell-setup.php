@@ -553,17 +553,53 @@ function setup_logging_directory($mode): bool {
 }
 
 /**
+ * Reads vendor/composer/installed.json and returns a map of
+ * package name => actual install directory (realpath), as resolved by
+ * Composer. This is the authoritative source for a package's install
+ * folder, since it accounts for per-package overrides such as
+ * `extra.installer-name` or custom `installer-paths` rules that a naive
+ * "folder name = package short name" assumption would miss.
+ */
+function get_composer_install_paths(): array {
+    static $paths = null;
+    if ($paths !== null) return $paths;
+
+    $paths = [];
+    $file = 'vendor/composer/installed.json';
+    if (!file_exists($file)) return $paths;
+
+    $data = json_decode(file_get_contents($file), true);
+    $packages = $data['packages'] ?? (is_array($data) ? $data : []);
+    foreach ($packages as $pkg) {
+        if (!isset($pkg['name'], $pkg['install-path'])) continue;
+        $resolved = realpath(dirname($file) . '/' . $pkg['install-path']);
+        if ($resolved !== false) {
+            $paths[$pkg['name']] = $resolved;
+        }
+    }
+    return $paths;
+}
+
+/**
  * Validates the installed and active themes.
  */
 function validate_themes(array $composer_data): bool {
     global $mode; // Add this to access the mode
     $jengo_themes = [];
-    // Extract all jengo-agency theme slugs from composer data
+    $install_paths = get_composer_install_paths();
+    // Extract all jengo-agency theme slugs from composer data. Prefer the
+    // real install folder from Composer's installed.json, since a package
+    // can override its install folder (e.g. via extra.installer-name)
+    // independently of its package name.
     if (isset($composer_data['require'])) {
         foreach ($composer_data['require'] as $pkg => $version) {
             if (str_starts_with((string)$pkg, 'jengo-agency/')) {
-                $parts = explode('/', (string)$pkg);
-                $jengo_themes[] = end($parts);
+                if (isset($install_paths[$pkg])) {
+                    $jengo_themes[] = basename($install_paths[$pkg]);
+                } else {
+                    $parts = explode('/', (string)$pkg);
+                    $jengo_themes[] = end($parts);
+                }
             }
         }
     }
