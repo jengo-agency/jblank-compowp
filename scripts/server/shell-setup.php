@@ -553,31 +553,30 @@ function setup_logging_directory($mode): bool {
 }
 
 /**
- * Reads vendor/composer/installed.json and returns a map of
- * package name => actual install directory (realpath), as resolved by
- * Composer. This is the authoritative source for a package's install
- * folder, since it accounts for per-package overrides such as
- * `extra.installer-name` or custom `installer-paths` rules that a naive
- * "folder name = package short name" assumption would miss.
+ * Reads vendor/composer/installed.json and returns the raw package
+ * records (keyed by package name), as resolved by Composer. This is the
+ * authoritative source for what actually got installed and where: a
+ * package's require-key text is not reliable, since a package can be
+ * renamed and kept resolvable via a `replace` entry (e.g. the require key
+ * "jengo-agency/ocim-2024" can be satisfied by a package whose own name
+ * is "jengo-agency/ocim-v3"), and its install folder can be overridden
+ * via `extra.installer-name` independently of its package name.
  */
-function get_composer_install_paths(): array {
-    static $paths = null;
-    if ($paths !== null) return $paths;
+function get_composer_installed_packages(): array {
+    static $pkgs = null;
+    if ($pkgs !== null) return $pkgs;
 
-    $paths = [];
+    $pkgs = [];
     $file = 'vendor/composer/installed.json';
-    if (!file_exists($file)) return $paths;
+    if (!file_exists($file)) return $pkgs;
 
     $data = json_decode(file_get_contents($file), true);
     $packages = $data['packages'] ?? (is_array($data) ? $data : []);
     foreach ($packages as $pkg) {
-        if (!isset($pkg['name'], $pkg['install-path'])) continue;
-        $resolved = realpath(dirname($file) . '/' . $pkg['install-path']);
-        if ($resolved !== false) {
-            $paths[$pkg['name']] = $resolved;
-        }
+        if (!isset($pkg['name'])) continue;
+        $pkgs[$pkg['name']] = $pkg;
     }
-    return $paths;
+    return $pkgs;
 }
 
 /**
@@ -586,20 +585,29 @@ function get_composer_install_paths(): array {
 function validate_themes(array $composer_data): bool {
     global $mode; // Add this to access the mode
     $jengo_themes = [];
-    $install_paths = get_composer_install_paths();
-    // Extract all jengo-agency theme slugs from composer data. Prefer the
-    // real install folder from Composer's installed.json, since a package
-    // can override its install folder (e.g. via extra.installer-name)
-    // independently of its package name.
-    if (isset($composer_data['require'])) {
+    $installed_packages = get_composer_installed_packages();
+    $file = 'vendor/composer/installed.json';
+
+    // Derive jengo-agency theme slugs from what Composer actually
+    // installed (by package type), not from composer.json's require
+    // keys, since those can point at a renamed/replaced package name.
+    foreach ($installed_packages as $name => $pkg) {
+        if (!str_starts_with((string)$name, 'jengo-agency/')) continue;
+        if (($pkg['type'] ?? '') !== 'wordpress-theme') continue;
+        if (!isset($pkg['install-path'])) continue;
+        $resolved = realpath(dirname($file) . '/' . $pkg['install-path']);
+        if ($resolved !== false) {
+            $jengo_themes[] = basename($resolved);
+        }
+    }
+
+    // Fallback: if installed.json isn't available, fall back to
+    // guessing from composer.json's require keys directly.
+    if (empty($jengo_themes) && isset($composer_data['require'])) {
         foreach ($composer_data['require'] as $pkg => $version) {
             if (str_starts_with((string)$pkg, 'jengo-agency/')) {
-                if (isset($install_paths[$pkg])) {
-                    $jengo_themes[] = basename($install_paths[$pkg]);
-                } else {
-                    $parts = explode('/', (string)$pkg);
-                    $jengo_themes[] = end($parts);
-                }
+                $parts = explode('/', (string)$pkg);
+                $jengo_themes[] = end($parts);
             }
         }
     }
@@ -637,7 +645,7 @@ function validate_themes(array $composer_data): bool {
         output_warning("Could not definitively determine child theme. Falling back to first detected jengo theme: $expected_theme_repo");
     }
 
-    output_info("Expected theme from composer.json: $expected_theme_repo");
+    output_info("Expected theme (from Composer's installed packages): $expected_theme_repo");
     $jblank_found = false;
     $project_theme_found = false;
 
